@@ -29,11 +29,19 @@ button{font-family:inherit;cursor:pointer}
   font-weight:700;letter-spacing:.05em}
 .newbtn:hover{background:#f3c451}
 .plist{flex:1;overflow:auto;padding:0 10px 14px}
-.pitem{padding:10px 12px;border-radius:6px;margin-bottom:4px;border:1px solid transparent}
+.pitem{position:relative;padding:10px 12px;border-radius:6px;margin-bottom:4px;border:1px solid transparent}
 .pitem:hover{background:var(--panel2)}
 .pitem.active{background:var(--panel2);border-color:var(--amber-dim)}
-.pitem .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pitem .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:18px}
 .pitem .meta{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:3px}
+/* 刪除小按鈕（專案/章節共用）*/
+.delx{position:absolute;top:8px;right:8px;width:20px;height:20px;padding:0;line-height:1;
+  background:transparent;border:none;border-radius:4px;color:var(--ink-faint);font-size:12px;
+  opacity:0;transition:opacity .12s}
+.pitem:hover .delx,.chapitem:hover .delx{opacity:1}
+.delx:hover{background:rgba(229,97,90,.15);color:var(--red)}
+.chapitem{position:relative;padding-right:30px}
+.chapitem .delx{position:static;opacity:.45}
 
 /* ---------- 主區 ---------- */
 .main{flex:1;display:flex;flex-direction:column;height:100%;overflow:hidden}
@@ -241,6 +249,7 @@ async function refreshList(){
   if(!projects.length){ el.innerHTML='<div class="note">尚無專案</div>'; return; }
   el.innerHTML = projects.map(p=>`
     <div class="pitem ${proj&&proj.id===p.id?'active':''}" onclick="selectProject('${p.id}')">
+      <button class="delx" title="刪除專案" onclick="deleteProject(event,'${p.id}','${ja(p.name)}')">✕</button>
       <div class="nm">${esc(p.name)}</div>
       <div class="meta">${p.chapters} 章 · ${p.id}</div></div>`).join("");
 }
@@ -264,7 +273,8 @@ function renderChapbar(){
   bar.innerHTML = proj.chapters.map(c=>{
     const dots = meta.stages.map(s=>`<i class="${c.stages[s.key]||''}"></i>`).join("");
     return `<div class="chapitem ${chap&&chap.id===c.id?'active':''}" onclick="selectChapter('${c.id}')">
-      <span>${esc(c.title)}</span><span class="pr">${dots}</span></div>`;
+      <span>${esc(c.title)}</span><span class="pr">${dots}</span>
+      <button class="delx" title="刪除章節" onclick="deleteChapter(event,'${c.id}','${ja(c.title)}')">✕</button></div>`;
   }).join("") + `<button class="addchap" onclick="openChap()">＋ 新增章節</button>`;
 }
 
@@ -489,7 +499,47 @@ async function createChapter(){
   await selectChapter(ch.id);
 }
 
+// ---------- 刪除 ----------
+async function deleteProject(ev, id, name){
+  ev.stopPropagation();
+  if(!confirm(`確定刪除專案「${name}」？\n所有章節、影格、影片與角色立繪都會一併刪除，無法復原。`)) return;
+  try{
+    await api(`/api/projects/${id}`,{method:"DELETE"});
+    if(proj && proj.id===id){
+      proj=null; chap=null; clearInterval(pollTimer);
+      document.getElementById("ptitle").textContent="— 尚未選擇專案 —";
+      document.getElementById("psub").textContent="";
+      document.getElementById("chapbar").style.display="none";
+      document.getElementById("runall").disabled=true;
+      document.getElementById("body").innerHTML='<div class="empty">建立或選擇左側專案以開始</div>';
+    }
+    await refreshList();
+  }catch(e){ alert("刪除失敗："+e.message); }
+}
+async function deleteChapter(ev, cid, title){
+  ev.stopPropagation();
+  if(!confirm(`確定刪除章節「${title}」？\n本章的影格、影片與字幕都會刪除（角色卡為專案共用，不受影響）。`)) return;
+  try{
+    await api(`/api/projects/${proj.id}/chapters/${cid}`,{method:"DELETE"});
+    proj = await api(`/api/projects/${proj.id}`);
+    if(chap && chap.id===cid){
+      chap=null; clearInterval(pollTimer);
+      if(proj.chapters.length){ await selectChapter(proj.chapters[0].id); }
+      else{
+        renderChapbar();
+        document.getElementById("body").innerHTML='<div class="empty">選擇上方章節，或新增一章</div>';
+        document.getElementById("runall").disabled=true;
+      }
+    }else{
+      renderChapbar();
+    }
+    await refreshList();
+  }catch(e){ alert("刪除失敗："+e.message); }
+}
+
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// 供內嵌 onclick 的單引號 JS 字串使用：先 HTML 跳脫，再跳脫反斜線與單引號
+function ja(s){ return esc(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 </script>
 </body>
 </html>

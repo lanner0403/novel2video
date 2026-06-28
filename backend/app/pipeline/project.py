@@ -16,7 +16,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import stat
 import time
 import uuid
 from pathlib import Path
@@ -41,6 +44,48 @@ def slugify(name: str) -> str:
     """角色名 → 檔名安全 slug（保留中英數，其餘換底線）。"""
     s = re.sub(r"[^\w一-龥]+", "_", name.strip())
     return s.strip("_") or "char"
+
+
+# 檔名/顯示名不允許的字元：Windows 保留字元 + 控制字元
+_INVALID_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def clean_name(name: str, fallback: str = "未命名", limit: int = 80) -> str:
+    """清理使用者輸入的名稱：移除不可用字元、壓縮空白、去頭尾的點與空白、限制長度。"""
+    s = _INVALID_NAME.sub("", name or "")
+    s = re.sub(r"\s+", " ", s).strip().strip(".").strip()
+    return s[:limit] or fallback
+
+
+def _rmtree(path: Path) -> None:
+    """刪除資料夾（Windows 友善）。
+
+    Windows 上目錄/檔案被防毒、索引或前端輪詢短暫持有時，rmtree 會偶發存取被拒；
+    這裡先清唯讀旗標、重試數次。為確保即使資料夾殘留、專案也不再出現在清單，
+    先刪掉 state.json（list_all/load 以它為準）。
+    """
+    if not path.exists():
+        return
+    sp = path / "state.json"
+    try:
+        sp.unlink(missing_ok=True)   # 先讓專案/章節從清單消失
+    except OSError:
+        pass
+    for attempt in range(10):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            for root, _dirs, files in os.walk(path):
+                for f in files:
+                    try:
+                        os.chmod(os.path.join(root, f), stat.S_IWRITE)
+                    except OSError:
+                        pass
+            time.sleep(0.1 * (attempt + 1))
+    shutil.rmtree(path, ignore_errors=True)   # 盡力而為
 
 
 def _atomic_write_json(path: Path, obj: Any) -> None:
@@ -82,13 +127,20 @@ class Project:
         p = cls(pid)
         p.state = {
             "id": pid,
-            "name": name,
+            "name": clean_name(name, "未命名專案"),
             "created_at": time.time(),
             "chapters": [],          # [{id, title, created_at}]
             "logs": [],
         }
         p.save()
         return p
+
+    @classmethod
+    def delete(cls, pid: str) -> None:
+        d = DATA_DIR / "projects" / pid
+        if not (d / "state.json").exists():
+            raise FileNotFoundError(f"找不到專案 {pid}")
+        _rmtree(d)
 
     @classmethod
     def load(cls, pid: str) -> "Project":
@@ -133,12 +185,20 @@ class Project:
     # ---- 章節管理 ----
     def add_chapter(self, title: str, novel_text: str = "") -> "Chapter":
         cid = uuid.uuid4().hex[:10]
-        title = title or f"第 {len(self.state['chapters']) + 1} 章"
+        title = clean_name(title, f"第 {len(self.state['chapters']) + 1} 章")
         self.state["chapters"].append({"id": cid, "title": title, "created_at": time.time()})
         self.save()
         ch = Chapter(self, cid, title)
         ch.write_text("novel.txt", novel_text or "")
         return ch
+
+    def remove_chapter(self, cid: str) -> None:
+        metas = self.state.get("chapters", [])
+        if not any(c["id"] == cid for c in metas):
+            raise FileNotFoundError(f"找不到章節 {cid}")
+        self.state["chapters"] = [c for c in metas if c["id"] != cid]
+        self.save()
+        _rmtree(self.dir / "chapters" / cid)
 
     def list_chapters(self) -> list[dict]:
         return self.state.get("chapters", [])

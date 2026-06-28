@@ -101,8 +101,10 @@ GET  /api/settings                                   # 公開設定（隱去 api
 GET  /api/projects                                   # 專案列表
 POST /api/projects                                   # 建立 {name, novel_text?}（給 text 則建第 1 章）
 GET  /api/projects/{pid}                             # 專案詳情（章節摘要 + 角色數）
+DELETE /api/projects/{pid}                           # 刪除專案（有章節執行中則 409）
 POST /api/projects/{pid}/chapters                    # 新增章節 {title, novel_text}
 GET  /api/projects/{pid}/chapters/{cid}              # 章節詳情（各階段狀態、檔案可用性）
+DELETE /api/projects/{pid}/chapters/{cid}            # 刪除章節（執行中則 409）
 POST /api/projects/{pid}/chapters/{cid}/novel        # 更新章節內文（text 或 file 上傳）
 POST /api/projects/{pid}/chapters/{cid}/run          # {} 全跑 / {only} / {start} / {options:{regenerate}}
 GET  /api/projects/{pid}/chapters/{cid}/artifact/{k} # read_novel|storyboard 的 JSON
@@ -153,6 +155,9 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
 - **影片規格**：直式 9:16，預設 1080×1920 @ 24fps，每鏡頭預設 4 秒（見 `config.VideoSettings`）。
 - **mock 限制**：角色名為離線啟發式推測（`utils/text.extract_names`），真實 LLM 模式才會正確擷取。
 - **字幕計時**：目前用旁白/對白長度估時，非逐字時間軸；要精準需接 TTS。
-- **狀態檔寫入**：`Project.save` 用 `.tmp` + `replace` 原子寫入，避免半寫壞檔。
+- **狀態檔寫入**：`_atomic_write_json` 用 `.tmp` + `replace` 原子寫入，Windows 上 replace 偶發
+  WinError 5 會重試。
+- **名稱清理**：專案/章節名一律過 `clean_name`（移除 `< > : " / \ | ? *` 與控制字元、壓空白、去頭尾點）。
+- **刪除**：`Project.delete` / `remove_chapter` 用 `_rmtree`（先刪 state.json 讓清單立即反映，再重試刪資料夾）。
 - **無測試、無 git**：此專案目前不是 git repo，也沒有測試套件。改完後手動跑 mock 流水線驗證即可。
 - **修改 LLM 相關**：本專案以 OpenAI 相容端點為主；若要接 Anthropic/Claude，先查 `claude-api` 技能再動手。

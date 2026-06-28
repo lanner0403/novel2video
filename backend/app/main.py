@@ -70,6 +70,17 @@ def get_project(pid: str) -> dict:
     return _project_view(_load(pid))
 
 
+@app.delete("/api/projects/{pid}")
+def delete_project(pid: str) -> dict:
+    p = _load(pid)
+    # 任一章節執行中則不刪
+    for m in p.list_chapters():
+        if orch.is_running(pid, m["id"]):
+            raise HTTPException(409, "專案有章節正在執行中，請稍候再刪除")
+    Project.delete(pid)
+    return {"ok": True}
+
+
 # ---------- 章節 ----------
 @app.post("/api/projects/{pid}/chapters")
 def add_chapter(pid: str, body: CreateChapter) -> dict:
@@ -82,6 +93,16 @@ def add_chapter(pid: str, body: CreateChapter) -> dict:
 def get_chapter(pid: str, cid: str) -> dict:
     p = _load(pid)
     return _chapter_view(p, _load_chapter(p, cid))
+
+
+@app.delete("/api/projects/{pid}/chapters/{cid}")
+def delete_chapter(pid: str, cid: str) -> dict:
+    p = _load(pid)
+    _load_chapter(p, cid)
+    if orch.is_running(pid, cid):
+        raise HTTPException(409, "此章節正在執行中，請稍候再刪除")
+    p.remove_chapter(cid)
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/chapters/{cid}/novel")

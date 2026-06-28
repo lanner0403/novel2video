@@ -99,6 +99,8 @@ data/projects/{pid}/
   單批 LLM 逾時或回傳壞 JSON 時退回啟發式（只降級該批、不讓整步崩）；
   `_loads_loose` 容忍 ```json``` 圍欄、前後雜訊與尾逗號。
 - **立繪 seed 一致性**：`sd_first_frame` 從專案池查角色 seed，含該角色的首幀沿用，降低成像偏移。
+- **提示詞去重**：CLIP 上限 77 token，立繪/首幀 prompt 用 `_dedupe_prompt`（逗號去重＋截斷、重點在前），
+  避免風格詞重複堆疊把角色描述擠掉而被截斷。
 
 ## API
 

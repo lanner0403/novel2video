@@ -23,12 +23,27 @@ NEGATIVE = ("lowres, bad anatomy, bad hands, text, error, missing fingers, "
             "jpeg artifacts, signature, watermark, blurry")
 
 STYLE = "masterpiece, best quality, highly detailed, cinematic lighting, anime style"
-PORTRAIT_STYLE = ("full body character reference sheet, standing pose, plain background, "
-                  "front view, " + STYLE)
+# 立繪框景詞（簡短，不再疊一份 STYLE，組裝時去重）
+PORTRAIT_STYLE = "full body, standing pose, plain background, front view"
 CAMERAS = ["medium shot", "close-up", "wide establishing shot", "over-the-shoulder shot",
            "low angle shot", "bird's-eye view"]
 MOTIONS = ["slow push-in", "gentle pan left", "subtle handheld sway",
            "slow dolly out", "static with ambient motion"]
+
+
+def _dedupe_prompt(text: str, max_terms: int = 24) -> str:
+    """以逗號為單位去重（不分大小寫、保留順序）並截斷，避免 CLIP 77 token 超限被截掉重點。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for term in text.split(","):
+        t = term.strip()
+        key = t.lower()
+        if t and key not in seen:
+            seen.add(key)
+            out.append(t)
+            if len(out) >= max_terms:
+                break
+    return ", ".join(out)
 
 
 # ---------- 階段 1：讀取小說 ----------
@@ -144,7 +159,9 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
         seed = random.randint(1, 2_000_000_000)   # (重)生成一律給新種子
         card["seed"] = seed
         card["portrait"] = project.portrait_rel(name)
-        portrait_prompt = f'{card.get("sd_prompt", "")}, {PORTRAIT_STYLE}'
+        # 框景詞在前（必留），角色外貌次之，風格最後；去重避免超過 CLIP 77 token
+        portrait_prompt = _dedupe_prompt(
+            f'{PORTRAIT_STYLE}, {card.get("sd_prompt", "")}, {STYLE}')
         out = project.portrait_path(name)
         try:
             sd.txt2img(portrait_prompt, NEGATIVE, out, seed=seed)
@@ -214,8 +231,8 @@ def _mock_shot(seg: dict, char_lookup: dict) -> dict:
     mood_en, tone_zh = _scene_mood(txt)
     dialogue = extract_dialogue(txt)
     narration = txt if not dialogue else txt.replace(dialogue, "").strip()
-    # 首幀 prompt：把人物外貌＋場景明確寫進去
-    positive = ", ".join(t for t in [STYLE, char_tags, scene_kw] if t)
+    # 首幀 prompt：人物外貌＋場景在前（重點），風格在後；去重避免 CLIP 截斷
+    positive = _dedupe_prompt(", ".join(t for t in [char_tags, scene_kw, STYLE] if t))
     return {
         "id": f"shot_{i:04d}",
         "segment_index": i,
@@ -254,7 +271,7 @@ def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
         "summary": raw.get("summary") or base["summary"],
         "characters": raw.get("characters") or base["characters"],
         "first_frame_prompt": {
-            "positive": ff.get("positive") or base["first_frame_prompt"]["positive"],
+            "positive": _dedupe_prompt(ff.get("positive") or base["first_frame_prompt"]["positive"]),
             "negative": ff.get("negative") or NEGATIVE,
         },
         "comfy_prompt": {

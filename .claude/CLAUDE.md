@@ -129,6 +129,8 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
   `StableDiffusionPipeline` 或 `StableDiffusionXLPipeline`。換 SDXL 記得把尺寸改成 1024 系。
 - **VAE（SDXL 必要）**：`N2V_SD_VAE` 可掛外掛 VAE；`_resolve_vae` 在 SDXL+fp16 且未指定時自動套
   `madebyollin/sdxl-vae-fp16-fix`（原生 SDXL VAE 在 fp16 會出黑圖）。cache key 含 pipeline 型別與 VAE，切換會重載。
+- **單檔權重**：`N2V_SD_MODEL` / `N2V_SD_VAE` 可指向 A1111/WebUI 風格的單檔 `.safetensors`/`.ckpt`。
+  `_is_single_file` 偵測副檔名，改走 `from_single_file`（`from_pretrained` 只吃 diffusers 目錄，給單檔會報「not a valid JSON」）。
 - **低顯存**：`N2V_SD_CPU_OFFLOAD=true` 時呼叫 `enable_model_cpu_offload()`（需 accelerate，僅 cuda 生效）；
   它自管設備搬移，故與 `.to(device)` 互斥（程式碼二擇一）。
 

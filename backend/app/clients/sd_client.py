@@ -49,6 +49,18 @@ def _is_sdxl(cfg) -> bool:
     return "xl" in cfg.model.lower()
 
 
+def _is_single_file(path: str) -> bool:
+    """是否為 A1111/WebUI 風格的單一權重檔（需用 from_single_file 載入，而非 from_pretrained）。"""
+    return bool(path) and path.lower().endswith((".safetensors", ".ckpt"))
+
+
+def _load_vae(AutoencoderKL, vae_id: str, dtype):
+    """載入外掛 VAE：單檔走 from_single_file，HF repo / diffusers 目錄走 from_pretrained。"""
+    if _is_single_file(vae_id):
+        return AutoencoderKL.from_single_file(vae_id, torch_dtype=dtype)
+    return AutoencoderKL.from_pretrained(vae_id, torch_dtype=dtype)
+
+
 def _resolve_vae(cfg, sdxl: bool, dtype) -> str:
     """決定要載入的 VAE：明確指定優先；SDXL+fp16 留空時自動套用 fp16-fix 以免黑圖。"""
     import torch
@@ -76,13 +88,19 @@ def _get_pipe(cfg) -> Any:
 
     kwargs: dict = {"torch_dtype": dtype}
     if vae_id:
-        kwargs["vae"] = AutoencoderKL.from_pretrained(vae_id, torch_dtype=dtype)
-    if not sdxl:
-        # SDXL pipeline 不接受 safety_checker 參數
-        kwargs.update(safety_checker=None, requires_safety_checker=False)
+        kwargs["vae"] = _load_vae(AutoencoderKL, vae_id, dtype)
 
     Pipe = StableDiffusionXLPipeline if sdxl else StableDiffusionPipeline
-    pipe = Pipe.from_pretrained(cfg.model, **kwargs)
+    if _is_single_file(cfg.model):
+        # A1111/WebUI 風格的單檔 .safetensors/.ckpt → from_single_file（from_pretrained 會找不到 config）
+        if not sdxl:
+            kwargs["load_safety_checker"] = False
+        pipe = Pipe.from_single_file(cfg.model, **kwargs)
+    else:
+        if not sdxl:
+            # SDXL pipeline 不接受 safety_checker 參數
+            kwargs.update(safety_checker=None, requires_safety_checker=False)
+        pipe = Pipe.from_pretrained(cfg.model, **kwargs)
 
     # 低顯存：model cpu offload 會自行管理設備搬移，故與 .to(device) 互斥，僅 cuda 有意義
     if getattr(cfg, "cpu_offload", False) and device == "cuda":

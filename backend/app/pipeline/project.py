@@ -43,6 +43,25 @@ def slugify(name: str) -> str:
     return s.strip("_") or "char"
 
 
+def _atomic_write_json(path: Path, obj: Any) -> None:
+    """以 .tmp + replace 原子寫入 JSON。
+
+    Windows 上當另一個 handle（例如前端輪詢正在讀 state.json）短暫持有目標檔時，
+    replace 會偶發 WinError 5（存取被拒）。此處重試數次；真的搬不動才退回直接覆寫。
+    """
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), "utf-8")
+    for attempt in range(10):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            time.sleep(0.05 * (attempt + 1))
+    # 最後手段：直接覆寫（非原子，但勝過整步失敗）
+    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), "utf-8")
+    tmp.unlink(missing_ok=True)
+
+
 # ============================================================
 # 專案
 # ============================================================
@@ -104,9 +123,7 @@ class Project:
         return {"id": self.id, "name": self.id, "chapters": [], "logs": []}
 
     def save(self) -> None:
-        tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), "utf-8")
-        tmp.replace(self.state_path)
+        _atomic_write_json(self.state_path, self.state)
 
     def log(self, msg: str) -> None:
         self.state.setdefault("logs", []).append({"t": time.time(), "msg": msg})
@@ -176,9 +193,7 @@ class Chapter:
                 "logs": []}
 
     def save(self) -> None:
-        tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=2), "utf-8")
-        tmp.replace(self.state_path)
+        _atomic_write_json(self.state_path, self.state)
 
     # ---- 階段狀態 ----
     def set_stage(self, key: str, status: str, **meta: Any) -> None:

@@ -82,7 +82,14 @@ def _get_pipe(cfg) -> Any:
         kwargs.update(safety_checker=None, requires_safety_checker=False)
 
     Pipe = StableDiffusionXLPipeline if sdxl else StableDiffusionPipeline
-    pipe = Pipe.from_pretrained(cfg.model, **kwargs).to(device)
+    pipe = Pipe.from_pretrained(cfg.model, **kwargs)
+
+    # 低顯存：model cpu offload 會自行管理設備搬移，故與 .to(device) 互斥，僅 cuda 有意義
+    if getattr(cfg, "cpu_offload", False) and device == "cuda":
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe = pipe.to(device)
+
     pipe.enable_attention_slicing()
     if device == "cuda":
         try:

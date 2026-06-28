@@ -129,6 +129,8 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
   `StableDiffusionPipeline` 或 `StableDiffusionXLPipeline`。換 SDXL 記得把尺寸改成 1024 系。
 - **VAE（SDXL 必要）**：`N2V_SD_VAE` 可掛外掛 VAE；`_resolve_vae` 在 SDXL+fp16 且未指定時自動套
   `madebyollin/sdxl-vae-fp16-fix`（原生 SDXL VAE 在 fp16 會出黑圖）。cache key 含 pipeline 型別與 VAE，切換會重載。
+- **低顯存**：`N2V_SD_CPU_OFFLOAD=true` 時呼叫 `enable_model_cpu_offload()`（需 accelerate，僅 cuda 生效）；
+  它自管設備搬移，故與 `.to(device)` 互斥（程式碼二擇一）。
 
 **ComfyUI workflow 模板**：把 ComfyUI「Save (API Format)」匯出的 json 放進 `backend/workflows/`，
 並把 LoadImage 的 `image` 改成 `%IMAGE%`、CLIPTextEncode 的 `text` 改成 `%PROMPT%`，後端執行時自動替換。

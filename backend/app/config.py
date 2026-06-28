@@ -66,6 +66,8 @@ class SDSettings:
     guidance_scale: float = float(os.getenv("N2V_SD_CFG", "7.5"))
     # 運行設備：auto / cuda / mps / cpu
     device: str = os.getenv("N2V_SD_DEVICE", "auto")
+    # 低顯存時把模型分層 offload 到 CPU（需 accelerate；僅 cuda 生效，會取代 .to(device)）
+    cpu_offload: bool = _b("N2V_SD_CPU_OFFLOAD", False)
     # 全域種子（留空＝隨機）。各角色/鏡頭會再帶自己的種子以求一致性。
     seed: int | None = (int(os.environ["N2V_SD_SEED"]) if os.getenv("N2V_SD_SEED") else None)
     mock: bool = _b("N2V_SD_MOCK", True)

@@ -49,6 +49,8 @@ class LLMSettings:
     model: str = os.getenv("N2V_LLM_MODEL", "gpt-4o-mini")
     # 讀取逾時（秒）。本地 7B 產整章分鏡 JSON 可能很久，預設放寬到 300。
     timeout: float = float(os.getenv("N2V_LLM_TIMEOUT", "300"))
+    # 分鏡分批：每批送 N 段給 LLM（降低單次生成過久/逾時與 JSON 失敗）。<=0 表示整章一次送。
+    storyboard_batch: int = int(os.getenv("N2V_STORYBOARD_BATCH", "8"))
     mock: bool = _b("N2V_LLM_MOCK", True)
 
 

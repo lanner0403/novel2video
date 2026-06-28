@@ -12,6 +12,7 @@ import random
 
 from ..clients.llm_client import LLMClient
 from ..clients.sd_client import SDClient
+from ..config import settings
 from ..utils.text import split_segments, extract_dialogue, extract_names
 from .project import Project, Chapter
 
@@ -122,6 +123,87 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
     return result
 
 
+_SB_SYSTEM = ("你是專業分鏡師。為「給定的每個段落」各產生一個鏡頭，輸出 JSON {\"shots\": [...]}。"
+              "每個鏡頭含 id, segment_index(對應段落編號), summary, characters(陣列), "
+              "first_frame_prompt{positive,negative}(英文，用於 SD 首幀), "
+              "comfy_prompt{motion,camera,scene_transition}(英文，給 ComfyUI 圖生影), "
+              "narration(旁白,中文), dialogue(對白,中文), duration(秒)。"
+              "shots 數量需與輸入段落數量一致，segment_index 用輸入給的編號。")
+
+
+def _mock_shot(seg: dict, char_lookup: dict) -> dict:
+    """離線/補空用：依單一段落啟發式產生一個完整鏡頭。"""
+    i, txt = seg["index"], seg["text"]
+    present = [c for n, c in char_lookup.items() if n in txt]
+    char_tags = ", ".join(c["sd_prompt"] for c in present[:2])
+    dialogue = extract_dialogue(txt)
+    narration = txt if not dialogue else txt.replace(dialogue, "").strip()
+    positive = ", ".join(t for t in [STYLE, char_tags, _scene_keywords(txt)] if t)
+    return {
+        "id": f"shot_{i:04d}",
+        "segment_index": i,
+        "summary": txt[:40],
+        "characters": [c["name"] for c in present],
+        "first_frame_prompt": {"positive": positive, "negative": NEGATIVE},
+        "comfy_prompt": {
+            "motion": MOTIONS[i % len(MOTIONS)],
+            "camera": CAMERAS[i % len(CAMERAS)],
+            "scene_transition": "fade" if i % 4 == 0 else "cut",
+        },
+        "narration": narration or txt,
+        "dialogue": dialogue,
+        "duration": 4.0,
+    }
+
+
+def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
+    """把 LLM 回的鏡頭補成「一段一個、欄位齊全」；缺漏處用啟發式預設補上。"""
+    base = _mock_shot(seg, char_lookup)
+    if not isinstance(raw, dict):
+        return base
+    i, txt = seg["index"], seg["text"]
+    ff = raw.get("first_frame_prompt") or {}
+    cp = raw.get("comfy_prompt") or {}
+    return {
+        "id": f"shot_{i:04d}",                 # id / segment_index 一律以實際段落為準
+        "segment_index": i,
+        "summary": raw.get("summary") or base["summary"],
+        "characters": raw.get("characters") or base["characters"],
+        "first_frame_prompt": {
+            "positive": ff.get("positive") or base["first_frame_prompt"]["positive"],
+            "negative": ff.get("negative") or NEGATIVE,
+        },
+        "comfy_prompt": {
+            "motion": cp.get("motion") or base["comfy_prompt"]["motion"],
+            "camera": cp.get("camera") or base["comfy_prompt"]["camera"],
+            "scene_transition": cp.get("scene_transition") or base["comfy_prompt"]["scene_transition"],
+        },
+        "narration": raw.get("narration") or base["narration"],
+        "dialogue": raw.get("dialogue") if raw.get("dialogue") is not None else base["dialogue"],
+        "duration": float(raw.get("duration") or 4.0),
+    }
+
+
+def _storyboard_batch(llm: LLMClient, segs: list[dict], characters: list[dict],
+                      char_lookup: dict) -> list[dict]:
+    """對一批段落產生分鏡，回傳正規化後、與段落一一對應的鏡頭。"""
+    sb = llm.generate_json(
+        system=_SB_SYSTEM,
+        user="角色：\n" + str(characters)[:2000] + "\n\n段落：\n"
+             + "\n".join(f'{s["index"]}. {s["text"]}' for s in segs)[:6000],
+        mock_builder=lambda: {"shots": [_mock_shot(s, char_lookup) for s in segs]},
+    )
+    raw = sb.get("shots", sb) if isinstance(sb, dict) else sb
+    raw = raw if isinstance(raw, list) else []
+    by_idx = {s.get("segment_index"): s for s in raw if isinstance(s, dict)}
+    out = []
+    for pos, seg in enumerate(segs):
+        # 先用 segment_index 對齊，否則用位置對齊，再不行就純啟發式補
+        match = by_idx.get(seg["index"]) or (raw[pos] if len(raw) == len(segs) else None)
+        out.append(_normalize_shot(match, seg, char_lookup))
+    return out
+
+
 # ---------- 階段 3：分鏡 ----------
 def run_storyboard(project: Project, ch: Chapter, options: dict) -> dict:
     segments = ch.read_json("segments.json")
@@ -129,47 +211,20 @@ def run_storyboard(project: Project, ch: Chapter, options: dict) -> dict:
     char_lookup = {c["name"]: c for c in characters}
     llm = LLMClient()
 
-    def mock() -> list[dict]:
-        shots = []
-        for seg in segments:
-            i = seg["index"]
-            txt = seg["text"]
-            present = [c for n, c in char_lookup.items() if n in txt]
-            char_tags = ", ".join(c["sd_prompt"] for c in present[:2])
-            dialogue = extract_dialogue(txt)
-            narration = txt if not dialogue else txt.replace(dialogue, "").strip()
-            positive = ", ".join(t for t in [STYLE, char_tags, _scene_keywords(txt)] if t)
-            shots.append({
-                "id": f"shot_{i:04d}",
-                "segment_index": i,
-                "summary": txt[:40],
-                "characters": [c["name"] for c in present],
-                "first_frame_prompt": {"positive": positive, "negative": NEGATIVE},
-                "comfy_prompt": {
-                    "motion": MOTIONS[i % len(MOTIONS)],
-                    "camera": CAMERAS[i % len(CAMERAS)],
-                    "scene_transition": "fade" if i % 4 == 0 else "cut",
-                },
-                "narration": narration or txt,
-                "dialogue": dialogue,
-                "duration": 4.0,
-            })
-        return shots
+    # 長章節分批送 LLM：每批 N 段，降低單次生成過久/逾時與 JSON 解析失敗的風險。
+    n = settings.llm.storyboard_batch
+    batches = ([segments[i:i + n] for i in range(0, len(segments), n)]
+               if n and n > 0 else [segments])
 
-    sb = llm.generate_json(
-        system="你是專業分鏡師。為每個段落產生一個鏡頭，輸出 JSON {\"shots\": [...]}。"
-               "每個鏡頭含 id, segment_index, summary, characters(陣列), "
-               "first_frame_prompt{positive,negative}(英文，用於 SD 首幀), "
-               "comfy_prompt{motion,camera,scene_transition}(英文，給 ComfyUI 圖生影), "
-               "narration(旁白,中文), dialogue(對白,中文), duration(秒)。",
-        user="角色：\n" + str(characters)[:2000] + "\n\n段落：\n"
-             + "\n".join(f'{s["index"]}. {s["text"]}' for s in segments)[:6000],
-        mock_builder=lambda: {"shots": mock()},
-    )
-    shots = sb.get("shots", sb) if isinstance(sb, dict) else sb
+    shots: list[dict] = []
+    for bi, segs in enumerate(batches):
+        shots.extend(_storyboard_batch(llm, segs, characters, char_lookup))
+        if len(batches) > 1:
+            ch.log(f"分鏡批次 {bi + 1}/{len(batches)} 完成（累計 {len(shots)} 鏡頭）")
+
     ch.write_json("storyboard.json", shots)
-    ch.log(f"分鏡完成，共 {len(shots)} 個鏡頭")
-    return {"shots": len(shots)}
+    ch.log(f"分鏡完成，共 {len(shots)} 個鏡頭（{len(batches)} 批）")
+    return {"shots": len(shots), "batches": len(batches)}
 
 
 def _scene_keywords(text: str) -> str:

@@ -92,6 +92,8 @@ data/projects/{pid}/
   防同一章節重複觸發（不同章節可並行）；前端輪詢章節 view 與 `logs` 取得進度。
 - **角色池合併**：`stages_text.run_character_cards` 把本章抽到的角色併入專案池；
   `options.regenerate` 名單中的角色（即使本章沒抽到、但已在池中）會用既有卡重生並換新 seed。
+- **分鏡分批**：`run_storyboard` 依 `N2V_STORYBOARD_BATCH`（預設 8）把段落切批分送 LLM，
+  `_normalize_shot` 以實際段落為準補齊 id/segment_index 與缺漏欄位（LLM 殘缺/亂序也能一段一鏡頭）。
 - **立繪 seed 一致性**：`sd_first_frame` 從專案池查角色 seed，含該角色的首幀沿用，降低成像偏移。
 
 ## API

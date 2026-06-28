@@ -1,0 +1,22 @@
+# 流水線產出的專案/章節工作區（成片、影格、立繪、狀態檔皆在此，不入庫）
+data/
+
+# 環境設定（含 API key）。只保留 .env.example
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# diffusers / HuggingFace 模型快取（數 GB）
+.cache/
+backend/.cache/
+
+# 編輯器 / 系統
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

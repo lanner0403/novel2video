@@ -1,0 +1,49 @@
+{
+  "_comment": "範例 ComfyUI 圖生影 workflow (API 格式)。請在 ComfyUI 用『Save (API Format)』匯出你自己的 workflow，並把載入圖片節點的 image 設為 %IMAGE%、正向提示詞節點的 text 設為 %PROMPT%。後端會自動替換這兩個佔位字串。下方為 SVD (Stable Video Diffusion) 示意。",
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "%IMAGE%", "upload": "image" }
+  },
+  "2": {
+    "class_type": "ImageOnlyCheckpointLoader",
+    "inputs": { "ckpt_name": "svd_xt.safetensors" }
+  },
+  "3": {
+    "class_type": "SVD_img2vid_Conditioning",
+    "inputs": {
+      "clip_vision": ["2", 1],
+      "init_image": ["1", 0],
+      "vae": ["2", 2],
+      "width": 576, "height": 1024,
+      "video_frames": 25, "motion_bucket_id": 127,
+      "fps": 6, "augmentation_level": 0.0
+    }
+  },
+  "4": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["2", 0], "positive": ["3", 0], "negative": ["3", 1],
+      "latent_image": ["3", 2],
+      "seed": 0, "steps": 20, "cfg": 2.5,
+      "sampler_name": "euler", "scheduler": "karras", "denoise": 1.0
+    }
+  },
+  "5": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["4", 0], "vae": ["2", 2] }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "_note": "SVD 本身不吃文字，此節點僅示意 %PROMPT% 注入點；Wan2.1/AnimateDiff workflow 會真正用到。",
+    "inputs": { "text": "%PROMPT%", "clip": ["2", 1] }
+  },
+  "7": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["5", 0],
+      "frame_rate": 24, "loop_count": 0,
+      "filename_prefix": "n2v", "format": "video/h264-mp4",
+      "pingpong": false, "save_output": true
+    }
+  }
+}

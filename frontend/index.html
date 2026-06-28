@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小說轉影片 · 流水線控制台</title>
+<style>
+:root{
+  --bg:#0c0b09; --panel:#15130e; --panel2:#1c1a13; --line:#2a261b;
+  --ink:#ece6d6; --ink-dim:#9a917d; --ink-faint:#675f4e;
+  --amber:#e8b23a; --amber-dim:#a07d24; --green:#7bbf6a; --red:#e5615a; --blue:#6db0d6;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI","Noto Sans CJK TC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+  font-size:14px;line-height:1.5;display:flex;overflow:hidden}
+button{font-family:inherit;cursor:pointer}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- 側欄 ---------- */
+.sidebar{width:240px;flex:0 0 240px;background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;height:100%}
+.brand{padding:18px 18px 14px;border-bottom:1px solid var(--line)}
+.brand h1{margin:0;font-size:15px;letter-spacing:.14em;text-transform:uppercase;font-weight:700}
+.brand .reel{color:var(--amber);font-family:var(--mono);font-size:11px;letter-spacing:.2em;margin-top:4px}
+.newbtn{margin:14px;padding:10px;background:var(--amber);color:#1a1407;border:none;border-radius:6px;
+  font-weight:700;letter-spacing:.05em}
+.newbtn:hover{background:#f3c451}
+.plist{flex:1;overflow:auto;padding:0 10px 14px}
+.pitem{padding:10px 12px;border-radius:6px;margin-bottom:4px;border:1px solid transparent}
+.pitem:hover{background:var(--panel2)}
+.pitem.active{background:var(--panel2);border-color:var(--amber-dim)}
+.pitem .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pitem .meta{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:3px}
+
+/* ---------- 主區 ---------- */
+.main{flex:1;display:flex;flex-direction:column;height:100%;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,var(--panel),var(--bg))}
+.topbar .title{font-size:18px;font-weight:700}
+.topbar .sub{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-left:4px}
+.svc{display:flex;gap:8px;margin-left:auto}
+.chip{font-family:var(--mono);font-size:10px;padding:4px 8px;border-radius:4px;border:1px solid var(--line);
+  letter-spacing:.05em;display:flex;align-items:center;gap:5px}
+.chip b{font-weight:700}
+.chip.live{color:var(--green);border-color:#2f5128} .chip.live b{color:var(--green)}
+.chip.mock{color:var(--ink-dim)}
+.runall{padding:9px 16px;background:var(--amber);border:none;border-radius:6px;color:#1a1407;
+  font-weight:700;letter-spacing:.04em}
+.runall:hover{background:#f3c451} .runall:disabled{opacity:.4;cursor:not-allowed}
+
+/* 章節橫列 */
+.chapbar{display:flex;gap:8px;align-items:center;padding:12px 22px;border-bottom:1px solid var(--line);
+  overflow-x:auto;background:var(--panel)}
+.chapitem{padding:7px 14px;border:1px solid var(--line);border-radius:6px;white-space:nowrap;
+  font-size:13px;color:var(--ink-dim);display:flex;align-items:center;gap:7px}
+.chapitem:hover{border-color:var(--amber-dim);color:var(--ink)}
+.chapitem.active{background:var(--panel2);border-color:var(--amber);color:var(--amber)}
+.chapitem .pr{display:flex;gap:3px}
+.chapitem .pr i{width:6px;height:6px;border-radius:2px;background:var(--ink-faint)}
+.chapitem .pr i.done{background:var(--green)} .chapitem .pr i.running{background:var(--amber)}
+.chapitem .pr i.error{background:var(--red)}
+.addchap{padding:7px 12px;background:var(--panel2);border:1px dashed var(--amber-dim);border-radius:6px;
+  color:var(--amber);font-size:13px;white-space:nowrap}
+
+.body{flex:1;overflow:auto;padding:22px;display:grid;grid-template-columns:minmax(360px,1fr) minmax(420px,1.1fr);
+  gap:22px;align-content:start}
+.empty{margin:auto;text-align:center;color:var(--ink-faint);font-family:var(--mono);
+  letter-spacing:.1em;grid-column:1/-1;padding-top:80px}
+@media(max-width:980px){.body{grid-template-columns:1fr}}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.card>h2{margin:0;padding:13px 16px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.card>h2 .ix{color:var(--amber);font-family:var(--mono)}
+
+/* 小說輸入 */
+.novel textarea{width:100%;min-height:120px;background:var(--bg);color:var(--ink);border:none;
+  padding:14px 16px;font-family:var(--mono);font-size:12px;resize:vertical;line-height:1.6}
+.novel textarea:focus{outline:none}
+.novel .foot{display:flex;gap:10px;padding:11px 16px;border-top:1px solid var(--line);align-items:center}
+.novel .foot .cnt{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-left:auto}
+.btn-sm{padding:7px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;
+  color:var(--ink);font-size:12px}
+.btn-sm:hover{border-color:var(--amber-dim);color:var(--amber)}
+
+/* ---------- 膠卷流水線 ---------- */
+.reel-wrap{padding:8px 0}
+.stage{position:relative;margin:0 14px;padding:14px 18px 14px 16px;background:var(--panel2);
+  border-top:1px solid var(--line)}
+.stage:first-child{border-top:none}
+.stage::before,.stage::after{content:"";position:absolute;top:0;bottom:0;width:14px;
+  background-image:radial-gradient(circle at center, var(--bg) 38%, transparent 40%);
+  background-size:14px 13px;background-repeat:repeat-y;opacity:.7}
+.stage::before{left:0} .stage::after{right:0}
+.stage .row{display:flex;align-items:center;gap:12px;padding:0 6px}
+.stage .num{font-family:var(--mono);font-size:11px;color:var(--ink-faint);width:18px;text-align:right}
+.light{width:11px;height:11px;border-radius:50%;background:var(--ink-faint);flex:0 0 11px;
+  box-shadow:0 0 0 3px rgba(255,255,255,.02)}
+.light.done{background:var(--green);box-shadow:0 0 8px rgba(123,191,106,.5)}
+.light.running{background:var(--amber);animation:pulse 1s infinite}
+.light.error{background:var(--red);box-shadow:0 0 8px rgba(229,97,90,.5)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.stage .lbl{font-weight:600;flex:1}
+.stage .st{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint)}
+.stage .st.done{color:var(--green)} .stage .st.running{color:var(--amber)} .stage .st.error{color:var(--red)}
+.stage .acts{display:flex;gap:6px;padding:8px 6px 0 36px}
+.stage .acts button{font-family:var(--mono);font-size:11px;padding:4px 9px;background:transparent;
+  border:1px solid var(--line);border-radius:4px;color:var(--ink-dim)}
+.stage .acts button:hover{border-color:var(--amber-dim);color:var(--amber)}
+.stage .res{padding:4px 6px 0 36px;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+.stage .res.err{color:var(--red)}
+
+/* 輸出分頁 */
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;padding:11px;background:transparent;border:none;color:var(--ink-dim);
+  font-size:12px;letter-spacing:.06em;border-bottom:2px solid transparent}
+.tabs button.active{color:var(--amber);border-bottom-color:var(--amber)}
+.tabbody{padding:16px;max-height:560px;overflow:auto}
+
+/* 角色卡（含立繪 + 共用勾選）*/
+.charhead{display:flex;align-items:center;gap:10px;padding:0 2px 12px}
+.charhead .hint{font-size:11px;color:var(--ink-faint);flex:1}
+.char{display:flex;gap:12px;border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--panel2)}
+.char .portrait{width:84px;flex:0 0 84px;aspect-ratio:9/16;border-radius:6px;border:1px solid var(--line);
+  object-fit:cover;background:var(--bg)}
+.char .portrait.ph{display:flex;align-items:center;justify-content:center;font-family:var(--mono);
+  font-size:10px;color:var(--ink-faint);text-align:center}
+.char .info{flex:1;min-width:0}
+.char .cn{font-weight:700;color:var(--amber);display:flex;align-items:center;gap:8px}
+.char .cn label{font-size:11px;color:var(--ink-dim);font-weight:400;display:flex;align-items:center;gap:4px;margin-left:auto}
+.char .desc{font-size:12px;color:var(--ink-dim);margin-top:6px}
+.char .cp{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:6px;
+  background:var(--bg);padding:8px;border-radius:5px;word-break:break-all}
+
+.shot{border:1px solid var(--line);border-radius:8px;margin-bottom:12px;overflow:hidden;background:var(--panel2)}
+.shot .sh{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg);font-size:12px}
+.shot .sh .id{font-family:var(--mono);color:var(--amber);font-size:11px}
+.shot .sh .ch{margin-left:auto;font-size:11px;color:var(--ink-faint)}
+.shot .sb{padding:10px 12px}
+.kv{margin-bottom:8px}
+.kv .k{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint)}
+.kv .v{font-size:12px;margin-top:2px}
+.kv .v.mono{font-family:var(--mono);font-size:11px;color:var(--blue);word-break:break-all}
+.kv .v.neg{color:var(--ink-faint)}
+.pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
+.pill{font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:10px;background:var(--bg);
+  border:1px solid var(--line);color:var(--ink-dim)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}
+.grid img{width:100%;border-radius:5px;border:1px solid var(--line);aspect-ratio:9/16;object-fit:cover}
+.gridv{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.gridv video{width:100%;border-radius:6px;border:1px solid var(--line);background:#000}
+.final video{width:100%;max-width:300px;border-radius:8px;display:block;margin:0 auto;border:1px solid var(--line)}
+.dl{display:inline-block;margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--amber);
+  text-decoration:none}
+.logs{font-family:var(--mono);font-size:11px;line-height:1.7;color:var(--ink-dim)}
+.logs div{white-space:pre-wrap}
+.note{color:var(--ink-faint);font-family:var(--mono);font-size:11px;padding:20px;text-align:center}
+
+/* 對話框 */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:20}
+.modal.show{display:flex}
+.dialog{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px;width:440px;max-width:92vw}
+.dialog h3{margin:0 0 14px;font-size:14px;letter-spacing:.08em}
+.dialog input,.dialog textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;
+  color:var(--ink);padding:10px;font-family:var(--mono);font-size:12px;margin-bottom:12px}
+.dialog textarea{min-height:140px;resize:vertical}
+.dialog .row{display:flex;gap:10px;justify-content:flex-end}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><h1>NOVEL → REEL</h1><div class="reel">小說 · 分鏡 · 影片流水線</div></div>
+  <button class="newbtn" onclick="openCreate()">＋ 新增專案</button>
+  <div class="plist" id="plist"></div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <div class="title" id="ptitle">— 尚未選擇專案 —</div>
+    <div class="sub" id="psub"></div>
+    <div class="svc" id="svc"></div>
+    <button class="runall" id="runall" onclick="runAll()" disabled>▶ 本章全部執行</button>
+  </div>
+  <div class="chapbar" id="chapbar" style="display:none"></div>
+  <div class="body" id="body"><div class="empty">建立或選擇左側專案以開始</div></div>
+</div>
+
+<!-- 新增專案 -->
+<div class="modal" id="modal-proj">
+  <div class="dialog">
+    <h3>新增專案</h3>
+    <input id="mp-name" placeholder="專案名稱（例：開局泼我咖啡）">
+    <textarea id="mp-text" placeholder="（可選）貼上第 1 章內文…"></textarea>
+    <div class="row">
+      <button class="btn-sm" onclick="closeModal('modal-proj')">取消</button>
+      <button class="newbtn" style="margin:0;padding:9px 18px" onclick="createProject()">建立</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增章節 -->
+<div class="modal" id="modal-chap">
+  <div class="dialog">
+    <h3>新增章節</h3>
+    <input id="mc-title" placeholder="章節標題（例：第 2 章 社死現場）">
+    <textarea id="mc-text" placeholder="貼上本章內文…"></textarea>
+    <div class="row">
+      <button class="btn-sm" onclick="closeModal('modal-chap')">取消</button>
+      <button class="newbtn" style="margin:0;padding:9px 18px" onclick="createChapter()">新增</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = "";
+let meta = null;       // settings + stages
+let proj = null;       // 目前專案 view
+let chap = null;       // 目前章節 view
+let pollTimer = null;
+let activeTab = "char";
+
+async function api(path, opt){ const r = await fetch(API+path, opt); if(!r.ok){throw new Error((await r.json()).detail||r.status)} return r.json(); }
+
+// ---------- 初始化 ----------
+(async function(){ meta = await api("/api/settings"); renderSvc(); await refreshList(); })();
+
+function renderSvc(){
+  const s = meta.settings;
+  const chip = (name,m)=>`<span class="chip ${m?'mock':'live'}"><b>${name}</b>${m?'MOCK':'LIVE'}</span>`;
+  document.getElementById("svc").innerHTML =
+    chip("LLM",s.llm.mock)+chip("SD",s.sd.mock)+chip("ComfyUI",s.comfy.mock);
+}
+
+async function refreshList(){
+  const {projects} = await api("/api/projects");
+  const el = document.getElementById("plist");
+  if(!projects.length){ el.innerHTML='<div class="note">尚無專案</div>'; return; }
+  el.innerHTML = projects.map(p=>`
+    <div class="pitem ${proj&&proj.id===p.id?'active':''}" onclick="selectProject('${p.id}')">
+      <div class="nm">${esc(p.name)}</div>
+      <div class="meta">${p.chapters} 章 · ${p.id}</div></div>`).join("");
+}
+
+// ---------- 專案 ----------
+async function selectProject(id){
+  proj = await api(`/api/projects/${id}`);
+  chap = null;
+  document.getElementById("ptitle").textContent = proj.name;
+  document.getElementById("psub").textContent = `${proj.chapters.length} 章 · ${proj.character_count} 角色`;
+  await refreshList();
+  renderChapbar();
+  document.getElementById("body").innerHTML = '<div class="empty">選擇上方章節，或新增一章</div>';
+  document.getElementById("runall").disabled = true;
+  if(proj.chapters.length) selectChapter(proj.chapters[0].id);
+}
+
+function renderChapbar(){
+  const bar = document.getElementById("chapbar");
+  bar.style.display = "flex";
+  bar.innerHTML = proj.chapters.map(c=>{
+    const dots = meta.stages.map(s=>`<i class="${c.stages[s.key]||''}"></i>`).join("");
+    return `<div class="chapitem ${chap&&chap.id===c.id?'active':''}" onclick="selectChapter('${c.id}')">
+      <span>${esc(c.title)}</span><span class="pr">${dots}</span></div>`;
+  }).join("") + `<button class="addchap" onclick="openChap()">＋ 新增章節</button>`;
+}
+
+// ---------- 章節 ----------
+async function selectChapter(cid){
+  chap = await api(`/api/projects/${proj.id}/chapters/${cid}`);
+  renderChapbar();
+  renderMain(); startPoll();
+}
+
+function renderMain(){
+  document.getElementById("runall").disabled = chap.running;
+  document.getElementById("runall").textContent = chap.running ? "⋯ 執行中" : "▶ 本章全部執行";
+  document.getElementById("body").innerHTML = `
+    <div>
+      ${novelCard()}
+      ${pipelineCard()}
+    </div>
+    <div class="card">
+      <div class="tabs">
+        ${tab("char","角色卡")}${tab("board","分鏡")}${tab("frame","影格")}${tab("video","影片")}${tab("log","日誌")}
+      </div>
+      <div class="tabbody" id="tabbody"></div>
+    </div>`;
+  renderTab();
+}
+function tab(k,label){ return `<button class="${activeTab===k?'active':''}" onclick="setTab('${k}')">${label}</button>`; }
+function setTab(k){ activeTab=k; renderMain(); }
+
+function novelCard(){
+  return `<div class="card novel" style="margin-bottom:22px">
+    <h2><span class="ix">原文</span> ${esc(chap.title)} · 內文</h2>
+    <textarea id="novelText" placeholder="貼上本章內文…">${esc(chap.novel_text||'')}</textarea>
+    <div class="foot">
+      <button class="btn-sm" onclick="saveNovel()">儲存內文</button>
+      <label class="btn-sm" style="cursor:pointer">上傳 .txt
+        <input type="file" accept=".txt" style="display:none" onchange="uploadNovel(this)"></label>
+      <span class="cnt">${chap.novel_chars} 字</span>
+    </div></div>`;
+}
+
+function pipelineCard(){
+  const stages = chap.stages.map((s,i)=>{
+    const st = s.status;
+    const res = s.error ? `<div class="res err">✗ ${esc(s.error)}</div>`
+              : (s.result ? `<div class="res">${esc(JSON.stringify(s.result))}</div>` : "");
+    return `<div class="stage">
+      <div class="row">
+        <span class="num">${String(i+1).padStart(2,'0')}</span>
+        <span class="light ${st}"></span>
+        <span class="lbl">${s.label}</span>
+        <span class="st ${st}">${stLabel(st)}</span>
+      </div>
+      <div class="acts">
+        <button onclick="run('${s.key}','only')">只跑這步</button>
+        <button onclick="run('${s.key}','start')">從這裡往後</button>
+      </div>${res}</div>`;
+  }).join("");
+  return `<div class="card"><h2><span class="ix">流程</span> 流水線（可獨立 / 從任一階段續跑）</h2>
+    <div class="reel-wrap">${stages}</div></div>`;
+}
+function stLabel(s){return {pending:"待執行",running:"執行中",done:"完成",error:"失敗"}[s]||s;}
+
+// ---------- 分頁內容 ----------
+async function renderTab(){
+  const el = document.getElementById("tabbody"); if(!el) return;
+  if(activeTab==="char") return renderChar(el);
+  if(activeTab==="board") return renderBoard(el);
+  if(activeTab==="frame") return renderFrame(el);
+  if(activeTab==="video") return renderVideo(el);
+  if(activeTab==="log") return renderLog(el);
+}
+
+// 角色卡：專案層級共用池，勾選＝沿用，取消勾選＝重新生成
+async function renderChar(el){
+  const {characters} = await api(`/api/projects/${proj.id}/characters`);
+  const head = `<div class="charhead">
+      <button class="btn-sm" onclick="genCharacters()">依本章產生 / 更新角色卡</button>
+      <span class="hint">勾選＝沿用既有立繪；取消勾選的角色會重新生成。本章新角色一律自動生成。</span>
+    </div>`;
+  if(!characters.length){
+    el.innerHTML = head + '<div class="note">尚無共用角色。先執行「角色卡產生」或按上方按鈕。</div>';
+    return;
+  }
+  el.innerHTML = head + characters.map(c=>{
+    const url = `${API}/api/projects/${proj.id}/file/${c.portrait}?t=${Date.now()}`;
+    const portrait = c.portrait_available
+      ? `<img class="portrait" src="${url}" loading="lazy">`
+      : `<div class="portrait ph">無立繪</div>`;
+    return `<div class="char">
+      ${portrait}
+      <div class="info">
+        <div class="cn">${esc(c.name)}${c.aliases&&c.aliases.length?' · '+c.aliases.map(esc).join('/'):''}
+          <label><input type="checkbox" class="reuse" data-name="${esc(c.name)}" checked> 沿用</label></div>
+        <div class="desc">${esc(c.appearance||'')}　${esc(c.personality||'')}</div>
+        <div class="cp">${esc(c.sd_prompt||'')}</div>
+      </div></div>`;
+  }).join("");
+}
+// 產生/更新角色卡：未勾選者進 regenerate 名單
+async function genCharacters(){
+  const regenerate = [...document.querySelectorAll('.reuse')]
+    .filter(cb=>!cb.checked).map(cb=>cb.dataset.name);
+  await runStage("character_cards","only",{regenerate});
+}
+
+async function renderBoard(el){
+  const a = await api(`/api/projects/${proj.id}/chapters/${chap.id}/artifact/storyboard`);
+  if(!a.available){ el.innerHTML='<div class="note">尚未產生分鏡</div>'; return; }
+  el.innerHTML = a.data.map(s=>{
+    const ff=s.first_frame_prompt||{}, cp=s.comfy_prompt||{};
+    return `<div class="shot">
+      <div class="sh"><span class="id">${s.id}</span><span>${esc(s.summary||'')}</span>
+        <span class="ch">${(s.characters||[]).map(esc).join(' ')}</span></div>
+      <div class="sb">
+        <div class="kv"><div class="k">首幀 prompt（SD 正向）</div><div class="v mono">${esc(ff.positive||'')}</div></div>
+        <div class="kv"><div class="k">負向</div><div class="v mono neg">${esc(ff.negative||'')}</div></div>
+        <div class="kv"><div class="k">ComfyUI 動態 / 鏡頭 / 轉場</div>
+          <div class="pillrow"><span class="pill">🎥 ${esc(cp.camera||'')}</span>
+            <span class="pill">🎞 ${esc(cp.motion||'')}</span>
+            <span class="pill">✂ ${esc(cp.scene_transition||'')}</span></div></div>
+        ${s.dialogue?`<div class="kv"><div class="k">對白</div><div class="v">「${esc(s.dialogue)}」</div></div>`:''}
+        <div class="kv"><div class="k">旁白</div><div class="v">${esc(s.narration||'')}</div></div>
+      </div></div>`;
+  }).join("");
+}
+function renderFrame(el){
+  const f = chap.files.frames;
+  if(!f.length){ el.innerHTML='<div class="note">尚未生成首幀</div>'; return; }
+  el.innerHTML = `<div class="grid">${f.map(n=>
+    `<img src="${API}/api/projects/${proj.id}/chapters/${chap.id}/file/frames/${n}?t=${Date.now()}" loading="lazy">`).join("")}</div>`;
+}
+function renderVideo(el){
+  const base = `${API}/api/projects/${proj.id}/chapters/${chap.id}/file`;
+  let html="";
+  if(chap.files.output){
+    html += `<div class="final"><video src="${base}/${chap.files.output}?t=${Date.now()}" controls></video>
+      <div style="text-align:center"><a class="dl" href="${base}/${chap.files.output}" download>⬇ 下載成片</a>`;
+    if(chap.files.subtitle) html += `　<a class="dl" href="${base}/${chap.files.subtitle}" download>⬇ 字幕 SRT</a>`;
+    html += `</div></div><h2 style="border:none;padding:16px 0 6px;color:var(--ink-dim);font-size:12px;letter-spacing:.1em">片段</h2>`;
+  }
+  const c = chap.files.clips;
+  if(c.length){
+    html += `<div class="gridv">${c.map(n=>
+      `<video src="${base}/clips/${n}?t=${Date.now()}" controls muted></video>`).join("")}</div>`;
+  } else if(!chap.files.output){ html='<div class="note">尚未生成影片</div>'; }
+  el.innerHTML = html;
+}
+async function renderLog(el){
+  const {logs} = await api(`/api/projects/${proj.id}/chapters/${chap.id}/logs`);
+  el.innerHTML = `<div class="logs">${logs.slice().reverse().map(l=>
+    `<div>${new Date(l.t*1000).toLocaleTimeString()}　${esc(l.msg)}</div>`).join("")||'<div class="note">尚無日誌</div>'}</div>`;
+}
+
+// ---------- 動作 ----------
+async function run(key, mode){ return runStage(key, mode, {}); }
+async function runStage(key, mode, options){
+  const payload = mode==="only" ? {only:key, options} : {start:key, options};
+  try{
+    await api(`/api/projects/${proj.id}/chapters/${chap.id}/run`,
+      {method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    await selectChapter(chap.id);
+  }catch(e){ alert("無法執行："+e.message); }
+}
+async function runAll(){
+  try{
+    await api(`/api/projects/${proj.id}/chapters/${chap.id}/run`,
+      {method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({options:{}})});
+    await selectChapter(chap.id);
+  }catch(e){ alert("無法執行："+e.message); }
+}
+async function saveNovel(){
+  const text = document.getElementById("novelText").value;
+  const fd = new FormData(); fd.append("text", text);
+  await fetch(`${API}/api/projects/${proj.id}/chapters/${chap.id}/novel`,{method:"POST",body:fd});
+  await selectChapter(chap.id);
+}
+async function uploadNovel(input){
+  if(!input.files[0]) return;
+  const fd = new FormData(); fd.append("file", input.files[0]);
+  await fetch(`${API}/api/projects/${proj.id}/chapters/${chap.id}/novel`,{method:"POST",body:fd});
+  await selectChapter(chap.id);
+}
+
+// ---------- 輪詢 ----------
+function startPoll(){
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    if(!chap) return;
+    const prev = JSON.stringify(chap.stages.map(s=>s.status))+chap.running;
+    chap = await api(`/api/projects/${proj.id}/chapters/${chap.id}`);
+    const now = JSON.stringify(chap.stages.map(s=>s.status))+chap.running;
+    if(prev!==now){ renderMain(); proj = await api(`/api/projects/${proj.id}`); renderChapbar(); }
+    if(activeTab==="log" && chap.running) renderLog(document.getElementById("tabbody"));
+    if(!chap.running) clearInterval(pollTimer);
+  }, 1500);
+}
+
+// ---------- 對話框 ----------
+function openCreate(){ document.getElementById("modal-proj").classList.add("show"); }
+function openChap(){ document.getElementById("modal-chap").classList.add("show"); }
+function closeModal(id){ document.getElementById(id).classList.remove("show"); }
+
+async function createProject(){
+  const name = document.getElementById("mp-name").value.trim()||"未命名專案";
+  const novel_text = document.getElementById("mp-text").value;
+  const p = await api("/api/projects",{method:"POST",headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name,novel_text})});
+  closeModal("modal-proj");
+  document.getElementById("mp-name").value=""; document.getElementById("mp-text").value="";
+  await selectProject(p.id);
+}
+async function createChapter(){
+  const title = document.getElementById("mc-title").value.trim();
+  const novel_text = document.getElementById("mc-text").value;
+  const ch = await api(`/api/projects/${proj.id}/chapters`,{method:"POST",
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({title,novel_text})});
+  closeModal("modal-chap");
+  document.getElementById("mc-title").value=""; document.getElementById("mc-text").value="";
+  proj = await api(`/api/projects/${proj.id}`);
+  renderChapbar();
+  await selectChapter(ch.id);
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+</script>
+</body>
+</html>

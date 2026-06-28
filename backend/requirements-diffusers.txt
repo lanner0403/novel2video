@@ -1,0 +1,11 @@
+# 只有要用「本地 diffusers 真實出圖」(N2V_SD_MOCK=false) 時才需要安裝。
+# 體積很大(數 GB)，mock 模式不需要，故獨立成一檔，不混進主 requirements.txt。
+#
+#   pip install -r requirements-diffusers.txt
+#
+# CUDA 使用者請依顯卡改裝對應的 torch：見 https://pytorch.org/get-started/locally/
+torch>=2.1
+diffusers>=0.27
+transformers>=4.38
+accelerate>=0.27
+safetensors>=0.4

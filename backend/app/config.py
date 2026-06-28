@@ -47,6 +47,8 @@ class LLMSettings:
     base_url: str = os.getenv("N2V_LLM_BASE_URL", "https://api.openai.com/v1")
     api_key: str = os.getenv("N2V_LLM_API_KEY", "")
     model: str = os.getenv("N2V_LLM_MODEL", "gpt-4o-mini")
+    # 讀取逾時（秒）。本地 7B 產整章分鏡 JSON 可能很久，預設放寬到 300。
+    timeout: float = float(os.getenv("N2V_LLM_TIMEOUT", "300"))
     mock: bool = _b("N2V_LLM_MOCK", True)
 
 

@@ -44,16 +44,24 @@ class LLMClient:
         headers = {}
         if self.cfg.api_key:
             headers["Authorization"] = f"Bearer {self.cfg.api_key}"
-        with httpx.Client(timeout=120) as c:
-            r = c.post(f"{self.cfg.base_url}/chat/completions",
-                       json=payload, headers=headers)
-            # 部分本地端點（某些 Ollama 版本/模型）不支援 json_object，退回重試
-            if r.status_code >= 400 and "response_format" in payload:
-                payload.pop("response_format")
+        # 連線快、讀取放寬（本地模型生成慢）
+        timeout = httpx.Timeout(self.cfg.timeout, connect=15.0)
+        try:
+            with httpx.Client(timeout=timeout) as c:
                 r = c.post(f"{self.cfg.base_url}/chat/completions",
                            json=payload, headers=headers)
-            r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"]
+                # 部分本地端點（某些 Ollama 版本/模型）不支援 json_object，退回重試
+                if r.status_code >= 400 and "response_format" in payload:
+                    payload.pop("response_format")
+                    r = c.post(f"{self.cfg.base_url}/chat/completions",
+                               json=payload, headers=headers)
+                r.raise_for_status()
+                content = r.json()["choices"][0]["message"]["content"]
+        except httpx.TimeoutException as e:
+            raise TimeoutError(
+                f"LLM 連線逾時（{self.cfg.timeout:.0f}s）：本地模型可能太慢或內文過長。"
+                f"可調高 N2V_LLM_TIMEOUT、縮短章節，或先確認 {self.cfg.base_url} 正常回應。"
+            ) from e
         return _loads_loose(content)
 
 

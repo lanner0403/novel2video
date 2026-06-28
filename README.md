@@ -1,5 +1,11 @@
 # 小說轉影片 · 流水線控制台（Novel → Reel）
 
+![Python](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![diffusers](https://img.shields.io/badge/SD-diffusers-FFD21E?logo=huggingface&logoColor=black)
+![last commit](https://img.shields.io/github/last-commit/lanner0403/novel2video)
+![repo size](https://img.shields.io/github/repo-size/lanner0403/novel2video)
+
 把小說自動轉成短影片的流水線。參考 [`tyxben/AI_novel`](https://github.com/tyxben/AI_novel) 的分階段 +
 斷點續傳設計，但改成你要的**本地化路線**：首幀用**本地 diffusers（Stable Diffusion）**、影片用**本地 ComfyUI**。
 

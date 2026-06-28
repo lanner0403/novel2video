@@ -5,6 +5,7 @@
 ![diffusers](https://img.shields.io/badge/SD-diffusers-FFD21E?logo=huggingface&logoColor=black)
 ![last commit](https://img.shields.io/github/last-commit/lanner0403/novel2video)
 ![repo size](https://img.shields.io/github/repo-size/lanner0403/novel2video)
+![license](https://img.shields.io/badge/license-MIT-green)
 
 把小說自動轉成短影片的流水線。參考 [`tyxben/AI_novel`](https://github.com/tyxben/AI_novel) 的分階段 +
 斷點續傳設計，但改成你要的**本地化路線**：首幀用**本地 diffusers（Stable Diffusion）**、影片用**本地 ComfyUI**。
@@ -148,3 +149,9 @@ novel2video/
 
 - 字幕目前用旁白/對話長度估時；要更精準可接 TTS 取得逐字時間軸（參考來源專案的 `edge-tts` 作法）。
 - mock 模式的角色名為離線啟發式推測；真實 LLM 模式會正確擷取。
+
+---
+
+## 授權
+
+本專案以 [MIT License](LICENSE) 釋出。

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import random
+import re
 
 from ..clients.llm_client import LLMClient
 from ..clients.sd_client import SDClient
@@ -42,33 +43,75 @@ def run_read_novel(project: Project, ch: Chapter, options: dict) -> dict:
     return {"segments": len(segs)}
 
 
+_CHAR_SYSTEM = ("你是分鏡師，從小說片段擷取主要角色，輸出 JSON 物件 {\"characters\": [...]}，"
+                "每個角色含 name, aliases(陣列), appearance(外貌), personality(性格), "
+                "sd_prompt(用於 Stable Diffusion 的英文外貌提示詞)。只列有名有姓或明確指稱的角色。")
+
+
+def _mock_cards(text: str, top: int = 4) -> list[dict]:
+    """離線：依文字啟發式推測角色名，產生佔位角色卡。"""
+    return [{
+        "name": name,
+        "aliases": [],
+        "appearance": f"{name}，外貌特徵待補（離線推測）",
+        "personality": "性格描述待補（離線推測）",
+        "sd_prompt": f"1person, {name}, detailed face, expressive eyes, {STYLE}",
+    } for name in extract_names(text, top=top)]
+
+
+def _normalize_card(raw: dict) -> dict | None:
+    """補齊角色卡欄位；無名字則丟棄。aliases 強制成 list。"""
+    if not isinstance(raw, dict):
+        return None
+    name = (raw.get("name") or "").strip()
+    if not name:
+        return None
+    aliases = raw.get("aliases") or []
+    if isinstance(aliases, str):
+        aliases = [a.strip() for a in re.split(r"[、,/]", aliases) if a.strip()]
+    return {
+        "name": name,
+        "aliases": list(aliases),
+        "appearance": (raw.get("appearance") or f"{name}，外貌特徵待補").strip(),
+        "personality": (raw.get("personality") or "性格描述待補").strip(),
+        "sd_prompt": (raw.get("sd_prompt")
+                      or f"1person, {name}, detailed face, expressive eyes, {STYLE}").strip(),
+    }
+
+
+def _extract_characters(llm: LLMClient, segments: list[dict]) -> list[dict]:
+    """分批掃完整章內文擷取角色並聯集去重（避免長章節因截斷漏掉後段角色）。"""
+    n = settings.llm.character_batch
+    batches = ([segments[i:i + n] for i in range(0, len(segments), n)]
+               if n and n > 0 else [segments])
+    merged: dict[str, dict] = {}
+    for segs in batches:
+        chunk = "\n".join(s["text"] for s in segs)
+        sb = llm.generate_json(
+            system=_CHAR_SYSTEM,
+            user=chunk[:6000],
+            mock_builder=lambda c=chunk: {"characters": _mock_cards(c)},
+        )
+        raw = sb.get("characters", sb) if isinstance(sb, dict) else sb
+        for item in (raw if isinstance(raw, list) else []):
+            card = _normalize_card(item)
+            if not card:
+                continue
+            if card["name"] in merged:   # 跨批重複：聯集別名，其餘保留先出現的
+                ex = merged[card["name"]]
+                ex["aliases"] = list(dict.fromkeys(ex["aliases"] + card["aliases"]))
+            else:
+                merged[card["name"]] = card
+    return list(merged.values())
+
+
 # ---------- 階段 2：角色卡（專案層級共用池 + 立繪）----------
 def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
     segments = ch.read_json("segments.json")
-    full = "\n".join(s["text"] for s in segments)
     llm = LLMClient()
     regenerate = set(options.get("regenerate") or [])
 
-    def mock() -> list[dict]:
-        cards = []
-        for name in extract_names(full, top=4):
-            cards.append({
-                "name": name,
-                "aliases": [],
-                "appearance": f"{name}，外貌特徵待補（離線推測）",
-                "personality": "性格描述待補（離線推測）",
-                "sd_prompt": f"1person, {name}, detailed face, expressive eyes, {STYLE}",
-            })
-        return cards
-
-    candidates = llm.generate_json(
-        system="你是分鏡師，從小說擷取主要角色，輸出 JSON 物件 {\"characters\": [...]}，"
-               "每個角色含 name, aliases(陣列), appearance(外貌), personality(性格), "
-               "sd_prompt(用於 Stable Diffusion 的英文外貌提示詞)。",
-        user=full[:6000],
-        mock_builder=lambda: {"characters": mock()},
-    )
-    candidates = candidates.get("characters", candidates) if isinstance(candidates, dict) else candidates
+    candidates = _extract_characters(llm, segments)
 
     # 既有共用池
     pool = project.read_characters()

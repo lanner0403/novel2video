@@ -37,10 +37,10 @@ class ComfyClient:
                        out_path: Path) -> Path:
         if self.mock:
             return self._mock(image_path, seconds, out_path)
-        return self._real(image_path, prompt, out_path)
+        return self._real(image_path, prompt, seconds, out_path)
 
     # ---- 真實 ComfyUI ----
-    def _real(self, image_path: Path, prompt: str, out_path: Path) -> Path:
+    def _real(self, image_path: Path, prompt: str, seconds: float, out_path: Path) -> Path:
         base = self.cfg.base_url
         with httpx.Client(timeout=self.cfg.poll_timeout) as c:
             # 1. 上傳首幀
@@ -51,10 +51,11 @@ class ComfyClient:
             up.raise_for_status()
             server_name = up.json()["name"]
 
-            # 2. 注入 workflow
+            # 2. 注入 workflow（%IMAGE%/%PROMPT% 為字串；%DURATION% 連同引號換成整數秒數）
             wf = self._load_workflow()
             wf_str = json.dumps(wf).replace("%IMAGE%", server_name)\
-                                   .replace("%PROMPT%", prompt.replace('"', "'"))
+                                   .replace("%PROMPT%", prompt.replace('"', "'"))\
+                                   .replace('"%DURATION%"', str(max(1, int(round(seconds)))))
             workflow = json.loads(wf_str)
 
             client_id = uuid.uuid4().hex
@@ -106,13 +107,29 @@ class ComfyClient:
         return out_path
 
 
+_VIDEO_EXTS = (".mp4", ".webm", ".mkv", ".mov", ".gif")
+
+
 def _find_output(outputs: dict) -> dict | None:
-    """從 ComfyUI 輸出節點找出影片/動圖檔名。"""
+    """從 ComfyUI 輸出節點找出產出的檔案。
+
+    不同節點（SaveVideo / CreateVideo / VHS / SaveImage…）用的 key 不一（videos/gifs/images…），
+    故掃描所有節點的所有 list 欄位，優先回傳影片副檔名的檔案，否則退回第一個有 filename 的。
+    """
+    fallback = None
     for node in outputs.values():
-        for key in ("gifs", "videos", "images"):
-            if key in node and node[key]:
-                item = node[key][0]
-                return {"filename": item["filename"],
+        if not isinstance(node, dict):
+            continue
+        for val in node.values():
+            if not isinstance(val, list):
+                continue
+            for item in val:
+                if not isinstance(item, dict) or not item.get("filename"):
+                    continue
+                info = {"filename": item["filename"],
                         "subfolder": item.get("subfolder", ""),
                         "type": item.get("type", "output")}
-    return None
+                if item["filename"].lower().endswith(_VIDEO_EXTS):
+                    return info
+                fallback = fallback or info
+    return fallback

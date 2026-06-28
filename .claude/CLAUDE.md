@@ -140,7 +140,12 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
   它自管設備搬移，故與 `.to(device)` 互斥（程式碼二擇一）。
 
 **ComfyUI workflow 模板**：把 ComfyUI「Save (API Format)」匯出的 json 放進 `backend/workflows/`，
-並把 LoadImage 的 `image` 改成 `%IMAGE%`、CLIPTextEncode 的 `text` 改成 `%PROMPT%`，後端執行時自動替換。
+並把要替換的值改成佔位字串，`comfyui_client._real` 執行時自動替換：
+- `%IMAGE%`（LoadImage 的 `image`，上傳首幀後換成伺服器檔名）
+- `%PROMPT%`（提示詞文字，換成鏡頭動態 `camera, motion`）
+- `%DURATION%`（每鏡頭秒數；連同左右引號換成整數，故模板寫 `"value": "%DURATION%"`）
+內附兩個模板：`svd_i2v.json`（SVD）、`ltx2_i2v.json`（LTX-2.3 圖生影；用 `N2V_COMFY_WORKFLOW` 切換，
+需在 ComfyUI 先裝好對應自訂節點與模型）。輸出檔由 `_find_output` 掃所有節點欄位、優先取影片副檔名。
 
 ## 慣例與注意事項
 

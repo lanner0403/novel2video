@@ -25,6 +25,23 @@ from ..config import settings
 _PIPE: Any = None
 _PIPE_KEY: tuple | None = None
 
+# SDXL 單檔 VAE 缺架構設定，from_single_file 會誤用 SD1.5 預設（scaling_factor 不對、顏色偏淡），
+# 故明確指定 SDXL VAE 設定來源。
+_SDXL_VAE_CONFIG = "madebyollin/sdxl-vae-fp16-fix"
+
+
+def _setup_ssl() -> None:
+    """讓 huggingface_hub 下載走 Windows 憑證庫（對應 git 的 schannel 修法）。
+
+    某些環境（公司網路 / 缺中介憑證）下 Python 預設無法驗證 huggingface.co 的 SSL，
+    diffusers 載 single-file 模型需抓架構 config 就會失敗。truststore 改用 OS 信任庫即可。
+    """
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception:  # noqa: BLE001 — 沒裝 truststore 就照原樣（已連得上者不受影響）
+        pass
+
 
 def _detect_device(requested: str) -> str:
     """auto 時自動挑選最佳設備：cuda > mps > cpu。"""
@@ -54,9 +71,15 @@ def _is_single_file(path: str) -> bool:
     return bool(path) and path.lower().endswith((".safetensors", ".ckpt"))
 
 
-def _load_vae(AutoencoderKL, vae_id: str, dtype):
-    """載入外掛 VAE：單檔走 from_single_file，HF repo / diffusers 目錄走 from_pretrained。"""
+def _load_vae(AutoencoderKL, vae_id: str, dtype, sdxl: bool):
+    """載入外掛 VAE：單檔走 from_single_file，HF repo / diffusers 目錄走 from_pretrained。
+
+    SDXL 單檔 VAE 額外帶 config（否則預設 SD1.5 設定會讓成像偏淡）。
+    """
     if _is_single_file(vae_id):
+        if sdxl:
+            return AutoencoderKL.from_single_file(
+                vae_id, config=_SDXL_VAE_CONFIG, torch_dtype=dtype)
         return AutoencoderKL.from_single_file(vae_id, torch_dtype=dtype)
     return AutoencoderKL.from_pretrained(vae_id, torch_dtype=dtype)
 
@@ -84,11 +107,12 @@ def _get_pipe(cfg) -> Any:
     if _PIPE is not None and _PIPE_KEY == key:
         return _PIPE
 
+    _setup_ssl()  # single-file 載入需向 HF 抓架構 config，先確保 SSL 可驗證
     from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, AutoencoderKL
 
     kwargs: dict = {"torch_dtype": dtype}
     if vae_id:
-        kwargs["vae"] = _load_vae(AutoencoderKL, vae_id, dtype)
+        kwargs["vae"] = _load_vae(AutoencoderKL, vae_id, dtype, sdxl)
 
     Pipe = StableDiffusionXLPipeline if sdxl else StableDiffusionPipeline
     if _is_single_file(cfg.model):
@@ -101,6 +125,11 @@ def _get_pipe(cfg) -> Any:
             # SDXL pipeline 不接受 safety_checker 參數
             kwargs.update(safety_checker=None, requires_safety_checker=False)
         pipe = Pipe.from_pretrained(cfg.model, **kwargs)
+
+    # SDXL + fp16：VAE 解碼在 fp16 易數值溢位 → 全黑/NaN 圖。
+    # 開 force_upcast 讓 pipeline 在解碼時自動把 VAE 與 latents 一起轉 fp32（單檔 VAE 載入後預設可能為關）。
+    if sdxl and dtype == torch.float16 and hasattr(pipe, "vae"):
+        pipe.vae.config.force_upcast = True
 
     # 低顯存：model cpu offload 會自行管理設備搬移，故與 .to(device) 互斥，僅 cuda 有意義
     if getattr(cfg, "cpu_offload", False) and device == "cuda":

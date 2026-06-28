@@ -9,3 +9,5 @@ diffusers>=0.27
 transformers>=4.38
 accelerate>=0.27
 safetensors>=0.4
+# 讓 HF 下載走 OS 憑證庫，修正某些環境無法驗證 huggingface.co SSL 的問題（單檔模型需抓架構 config）
+truststore>=0.9

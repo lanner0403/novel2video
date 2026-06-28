@@ -131,6 +131,11 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
   `madebyollin/sdxl-vae-fp16-fix`（原生 SDXL VAE 在 fp16 會出黑圖）。cache key 含 pipeline 型別與 VAE，切換會重載。
 - **單檔權重**：`N2V_SD_MODEL` / `N2V_SD_VAE` 可指向 A1111/WebUI 風格的單檔 `.safetensors`/`.ckpt`。
   `_is_single_file` 偵測副檔名，改走 `from_single_file`（`from_pretrained` 只吃 diffusers 目錄，給單檔會報「not a valid JSON」）。
+  - `from_single_file` 需向 HF 抓架構 config；某些環境（公司網路/缺中介憑證）SSL 驗不過，`_setup_ssl()` 用
+    `truststore` 改走 OS 憑證庫（對應 git 的 schannel 修法，裝在 requirements-diffusers）。
+  - SDXL 單檔 VAE 會額外帶 `config=madebyollin/sdxl-vae-fp16-fix`，否則套到 SD1.5 預設、scaling 不對。
+- **SDXL 黑圖**：SDXL+fp16 時 VAE 解碼會數值溢位出全黑/NaN 圖。`_get_pipe` 設 `vae.config.force_upcast=True`，
+  讓 pipeline 解碼時自動把 VAE 與 latents 一起轉 fp32（單檔 VAE 載入後此旗標預設可能為關，故手動補上）。
 - **低顯存**：`N2V_SD_CPU_OFFLOAD=true` 時呼叫 `enable_model_cpu_offload()`（需 accelerate，僅 cuda 生效）；
   它自管設備搬移，故與 `.to(device)` 互斥（程式碼二擇一）。
 

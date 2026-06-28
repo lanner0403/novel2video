@@ -91,25 +91,35 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
         if name in pool_by_name and name not in to_process:
             to_process[name] = dict(pool_by_name[name])
 
+    portraits_ok, portrait_err = 0, None
     for name, card in to_process.items():
         exists = name in pool_by_name
         seed = random.randint(1, 2_000_000_000)   # (重)生成一律給新種子
         card["seed"] = seed
         card["portrait"] = project.portrait_rel(name)
         portrait_prompt = f'{card.get("sd_prompt", "")}, {PORTRAIT_STYLE}'
+        out = project.portrait_path(name)
         try:
-            sd.txt2img(portrait_prompt, NEGATIVE, project.portrait_path(name), seed=seed)
-        except Exception as e:  # noqa: BLE001 — 立繪失敗不應中斷角色卡
-            ch.log(f"⚠ 角色 {name} 立繪生成失敗：{e}")
+            sd.txt2img(portrait_prompt, NEGATIVE, out, seed=seed)
+            if not out.exists():
+                raise RuntimeError("txt2img 未產生檔案")
+            portraits_ok += 1
+            ch.log(f"角色卡 {name} {'重生' if exists else '新增'}，立繪完成（seed={seed}）")
+        except Exception as e:  # noqa: BLE001 — 立繪失敗不中斷角色卡，但要把原因浮出來
+            portrait_err = portrait_err or f"{name}: {type(e).__name__}: {e}"
+            ch.log(f"⚠ 角色 {name} 立繪生成失敗：{type(e).__name__}: {e}")
         pool_by_name[name] = card
         regen += int(exists)
         added += int(not exists)
-        ch.log(f"角色卡 {name} {'重生' if exists else '新增'}（立繪 seed={seed}）")
 
     project.write_characters(list(pool_by_name.values()))
-    ch.log(f"角色卡完成：新增 {added}、重生 {regen}、沿用 {reused}，共用池共 {len(pool_by_name)} 名")
-    return {"added": added, "regenerated": regen, "reused": reused,
-            "total": len(pool_by_name), "mock": sd.mock}
+    ch.log(f"角色卡完成：新增 {added}、重生 {regen}、沿用 {reused}，"
+           f"立繪 {portraits_ok}/{len(to_process)}，共用池共 {len(pool_by_name)} 名")
+    result = {"added": added, "regenerated": regen, "reused": reused,
+              "portraits": portraits_ok, "total": len(pool_by_name), "mock": sd.mock}
+    if portrait_err:
+        result["portrait_error"] = portrait_err   # 顯示在階段結果，方便排查
+    return result
 
 
 # ---------- 階段 3：分鏡 ----------

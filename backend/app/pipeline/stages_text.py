@@ -171,20 +171,51 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
 
 _SB_SYSTEM = ("你是專業分鏡師。為「給定的每個段落」各產生一個鏡頭，輸出 JSON {\"shots\": [...]}。"
               "每個鏡頭含 id, segment_index(對應段落編號), summary, characters(陣列), "
-              "first_frame_prompt{positive,negative}(英文，用於 SD 首幀), "
-              "comfy_prompt{motion,camera,scene_transition}(英文，給 ComfyUI 圖生影), "
-              "narration(旁白,中文), dialogue(對白,中文), duration(秒)。"
+              "first_frame_prompt{positive,negative}(英文；positive 要明確寫出『人物外貌＋場景＋動作』，"
+              "讓首幀圖就能看出是誰在什麼場景), "
+              "comfy_prompt{scene,characters,camera,motion,mood,scene_transition}(英文；scene 寫場景與動作、"
+              "characters 寫在場人物與外貌、mood 寫氛圍/語氣，給圖生影用), "
+              "narration(旁白,中文), dialogue(對白,中文), voice_tone(語音語氣,中文,如 溫柔/急促/憤怒/沉穩), "
+              "duration(秒,需足夠唸完旁白/對白)。"
               "shots 數量需與輸入段落數量一致，segment_index 用輸入給的編號。")
+
+# 語氣/氛圍啟發式：(關鍵字, 英文 mood, 中文語氣)
+_MOOD_TABLE = [
+    ("哭", "sad, melancholic", "哀傷"), ("淚", "sad, melancholic", "哀傷"),
+    ("笑", "cheerful, warm", "愉快"), ("怒", "tense, intense", "憤怒"),
+    ("吼", "tense, intense", "激動"), ("喊", "urgent, dramatic", "急促"),
+    ("驚", "suspenseful", "驚訝"), ("戰", "epic, dynamic", "緊張"),
+    ("愛", "romantic, soft", "深情"),
+]
+
+
+def _scene_mood(text: str) -> tuple[str, str]:
+    """回傳 (英文 mood, 中文語氣)；找不到關鍵字給沉穩預設。"""
+    for kw, mood, tone in _MOOD_TABLE:
+        if kw in text:
+            return mood, tone
+    return "calm, cinematic", "沉穩"
+
+
+def _estimate_duration(text: str, default: float = 4.0) -> float:
+    """依語音長度估鏡頭秒數（中文約每秒 4 字），夾在 3~12 秒。"""
+    n = len(re.sub(r"\s", "", text or ""))
+    if n == 0:
+        return default
+    return float(max(3.0, min(12.0, round(n / 4.0, 1))))
 
 
 def _mock_shot(seg: dict, char_lookup: dict) -> dict:
-    """離線/補空用：依單一段落啟發式產生一個完整鏡頭。"""
+    """離線/補空用：依單一段落啟發式產生一個完整鏡頭（含場景/人物/語氣/語音長度）。"""
     i, txt = seg["index"], seg["text"]
     present = [c for n, c in char_lookup.items() if n in txt]
     char_tags = ", ".join(c["sd_prompt"] for c in present[:2])
+    scene_kw = _scene_keywords(txt)
+    mood_en, tone_zh = _scene_mood(txt)
     dialogue = extract_dialogue(txt)
     narration = txt if not dialogue else txt.replace(dialogue, "").strip()
-    positive = ", ".join(t for t in [STYLE, char_tags, _scene_keywords(txt)] if t)
+    # 首幀 prompt：把人物外貌＋場景明確寫進去
+    positive = ", ".join(t for t in [STYLE, char_tags, scene_kw] if t)
     return {
         "id": f"shot_{i:04d}",
         "segment_index": i,
@@ -192,13 +223,17 @@ def _mock_shot(seg: dict, char_lookup: dict) -> dict:
         "characters": [c["name"] for c in present],
         "first_frame_prompt": {"positive": positive, "negative": NEGATIVE},
         "comfy_prompt": {
-            "motion": MOTIONS[i % len(MOTIONS)],
+            "scene": scene_kw or "cinematic scene",
+            "characters": char_tags,
             "camera": CAMERAS[i % len(CAMERAS)],
+            "motion": MOTIONS[i % len(MOTIONS)],
+            "mood": mood_en,
             "scene_transition": "fade" if i % 4 == 0 else "cut",
         },
         "narration": narration or txt,
         "dialogue": dialogue,
-        "duration": 4.0,
+        "voice_tone": tone_zh,
+        "duration": _estimate_duration(dialogue or narration or txt),
     }
 
 
@@ -207,9 +242,12 @@ def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
     base = _mock_shot(seg, char_lookup)
     if not isinstance(raw, dict):
         return base
-    i, txt = seg["index"], seg["text"]
+    i = seg["index"]
     ff = raw.get("first_frame_prompt") or {}
     cp = raw.get("comfy_prompt") or {}
+    bcp = base["comfy_prompt"]
+    narration = raw.get("narration") or base["narration"]
+    dialogue = raw.get("dialogue") if raw.get("dialogue") is not None else base["dialogue"]
     return {
         "id": f"shot_{i:04d}",                 # id / segment_index 一律以實際段落為準
         "segment_index": i,
@@ -220,13 +258,19 @@ def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
             "negative": ff.get("negative") or NEGATIVE,
         },
         "comfy_prompt": {
-            "motion": cp.get("motion") or base["comfy_prompt"]["motion"],
-            "camera": cp.get("camera") or base["comfy_prompt"]["camera"],
-            "scene_transition": cp.get("scene_transition") or base["comfy_prompt"]["scene_transition"],
+            "scene": cp.get("scene") or bcp["scene"],
+            "characters": cp.get("characters") or bcp["characters"],
+            "camera": cp.get("camera") or bcp["camera"],
+            "motion": cp.get("motion") or bcp["motion"],
+            "mood": cp.get("mood") or bcp["mood"],
+            "scene_transition": cp.get("scene_transition") or bcp["scene_transition"],
         },
-        "narration": raw.get("narration") or base["narration"],
-        "dialogue": raw.get("dialogue") if raw.get("dialogue") is not None else base["dialogue"],
-        "duration": float(raw.get("duration") or 4.0),
+        "narration": narration,
+        "dialogue": dialogue,
+        "voice_tone": raw.get("voice_tone") or base["voice_tone"],
+        # 尊重 LLM 給的秒數，但至少要夠唸完語音
+        "duration": max(float(raw.get("duration") or 0.0),
+                        _estimate_duration(dialogue or narration)),
     }
 
 
@@ -259,9 +303,29 @@ def _storyboard_batch(llm: LLMClient, segs: list[dict], characters: list[dict],
     return out
 
 
+def _merge_segments(segments: list[dict], target: int) -> list[dict]:
+    """分鏡前先把相鄰短段落整合到約 target 字一鏡頭，並重新編號。target<=0 則不整合。"""
+    if not target or target <= 0:
+        return [{"index": i, "text": s["text"]} for i, s in enumerate(segments)]
+    merged: list[str] = []
+    buf = ""
+    for s in segments:
+        t = s["text"]
+        if buf and len(buf) + len(t) > target:
+            merged.append(buf)
+            buf = t
+        else:
+            buf += t
+    if buf:
+        merged.append(buf)
+    return [{"index": i, "text": t} for i, t in enumerate(merged)]
+
+
 # ---------- 階段 3：分鏡 ----------
 def run_storyboard(project: Project, ch: Chapter, options: dict) -> dict:
-    segments = ch.read_json("segments.json")
+    raw_segments = ch.read_json("segments.json")
+    # 先整合一部分段落，讓每個鏡頭更完整、語音更連貫
+    segments = _merge_segments(raw_segments, settings.llm.storyboard_merge_chars)
     characters = project.read_characters()      # 用專案層級共用角色
     char_lookup = {c["name"]: c for c in characters}
     llm = LLMClient()

@@ -51,6 +51,8 @@ class LLMSettings:
     timeout: float = float(os.getenv("N2V_LLM_TIMEOUT", "300"))
     # 分鏡分批：每批送 N 段給 LLM（降低單次生成過久/逾時與 JSON 失敗）。<=0 表示整章一次送。
     storyboard_batch: int = int(os.getenv("N2V_STORYBOARD_BATCH", "4"))
+    # 分鏡前先把短段落整合到約 N 字一鏡頭（讓鏡頭更完整、語音更連貫）。<=0 表示不整合。
+    storyboard_merge_chars: int = int(os.getenv("N2V_STORYBOARD_MERGE_CHARS", "200"))
     # 角色擷取分批：每批送 N 段給 LLM 抽角色再聯集（避免長章節截斷漏掉後段角色）。<=0 整章一次送。
     character_batch: int = int(os.getenv("N2V_CHARACTER_BATCH", "12"))
     mock: bool = _b("N2V_LLM_MOCK", True)

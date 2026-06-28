@@ -158,7 +158,12 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
 ## 慣例與注意事項
 
 - **語言**：程式碼註解、log、API 訊息、UI 皆用**繁體中文**；SD/ComfyUI 提示詞用**英文**。
-- **影片規格**：直式 9:16，預設 1080×1920 @ 24fps，每鏡頭預設 4 秒（見 `config.VideoSettings`）。
+- **影片規格**：直式 9:16，預設 1080×1920 @ 24fps；鏡頭秒數依語音長度估算（`_estimate_duration`，3~12s）。
+- **comfy_prompt 內容**：含 scene/characters/camera/motion/mood + voice_tone；`stages_media._video_prompt`
+  把場景＋人物＋運鏡＋要唸的台詞與語氣組成提示，餵給 LTX 等帶語音的圖生影模型。
+- **合成保留音軌**：`_concat` 全部片段都有音軌時才併音軌（`_has_audio` 以 ffprobe 偵測），
+  字幕燒錄帶 `-c:a copy`；mock 推鏡無聲則走純影像路徑。LTX 生成的語音因此能保留到成片。
+- **分鏡前整合段落**：`_merge_segments` 依 `N2V_STORYBOARD_MERGE_CHARS`（預設 200）把短段落併到約 N 字一鏡頭。
 - **mock 限制**：角色名為離線啟發式推測（`utils/text.extract_names`），真實 LLM 模式才會正確擷取。
 - **字幕計時**：目前用旁白/對白長度估時，非逐字時間軸；要精準需接 TTS。
 - **狀態檔寫入**：`_atomic_write_json` 用 `.tmp` + `replace` 原子寫入，Windows 上 replace 偶發

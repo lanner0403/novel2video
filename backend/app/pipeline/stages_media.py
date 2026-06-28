@@ -47,14 +47,30 @@ def run_comfy_video(project: Project, ch: Chapter, options: dict) -> dict:
         if out.exists():
             shot["clip"] = f'clips/{shot["id"]}.mp4'
             continue
-        cp = shot["comfy_prompt"]
-        motion_prompt = f'{cp.get("camera","")}, {cp.get("motion","")}'
-        comfy.image_to_video(frame, motion_prompt, float(shot.get("duration", 4.0)), out)
+        comfy.image_to_video(frame, _video_prompt(shot),
+                             float(shot.get("duration", 4.0)), out)
         shot["clip"] = f'clips/{shot["id"]}.mp4'
         done += 1
         ch.log(f'ComfyUI 影片 {shot["id"]} 完成')
     ch.write_json("storyboard.json", shots)
     return {"generated": done, "total": len(shots), "mock": comfy.mock}
+
+
+def _video_prompt(shot: dict) -> str:
+    """組出給圖生影/語音模型的提示：場景＋人物＋運鏡＋氛圍，並帶入要唸的台詞與語氣。
+
+    LTX-2.3 等帶語音的模型會依此生成口白；旁白/對白用中文、其餘描述用英文。
+    """
+    cp = shot.get("comfy_prompt", {})
+    parts = [cp.get("scene"), cp.get("characters"),
+             ", ".join(t for t in [cp.get("camera"), cp.get("motion")] if t),
+             f'mood: {cp.get("mood")}' if cp.get("mood") else ""]
+    speech = (shot.get("dialogue") or shot.get("narration") or "").strip()
+    if speech:
+        tone = shot.get("voice_tone") or "沉穩"
+        kind = "對白" if shot.get("dialogue") else "旁白"
+        parts.append(f'{kind}（語氣：{tone}）：{speech}')
+    return ". ".join(p for p in parts if p)
 
 
 # ---------- 階段 6：字幕加載 ----------
@@ -98,9 +114,10 @@ def run_compose(project: Project, ch: Chapter, options: dict) -> dict:
     final = ch.dir / "output" / "final.mp4"
     if srt.exists() and srt.read_text("utf-8").strip():
         style = "FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BorderStyle=1,Outline=2,MarginV=60"
+        # -c:a copy 把合併後的音軌（若有，例如 LTX 生成的語音）一起帶進成片
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(merged),
                "-vf", f"subtitles='{_ff_path(srt)}':force_style='{style}'",
-               "-c:v", "libx264", "-pix_fmt", "yuv420p", str(final)]
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "copy", str(final)]
         subprocess.run(cmd, check=True)
         merged.unlink(missing_ok=True)
     else:
@@ -110,20 +127,41 @@ def run_compose(project: Project, ch: Chapter, options: dict) -> dict:
 
 
 # ---------- helpers ----------
+def _has_audio(path: Path) -> bool:
+    """用 ffprobe 偵測片段是否含音軌（LTX 生成的影片帶語音；mock 推鏡則無）。"""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True)
+        return bool(r.stdout.strip())
+    except Exception:  # noqa: BLE001 — 沒有 ffprobe 就當無音軌
+        return False
+
+
 def _concat(clips: list[Path], out: Path) -> None:
     w, h, fps = settings.video.width, settings.video.height, settings.video.fps
+    # 全部片段都有音軌才併音軌（避免部分有部分無導致 concat 失敗）
+    with_audio = all(_has_audio(c) for c in clips)
     inputs: list[str] = []
     for c in clips:
         inputs += ["-i", str(c)]
     n = len(clips)
-    filt = "".join(
+    vfilt = "".join(
         f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
         f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v{i}];"
         for i in range(n)
     )
-    filt += "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"
+    if with_audio:
+        afilt = "".join(f"[{i}:a]aresample=async=1[a{i}];" for i in range(n))
+        pairs = "".join(f"[v{i}][a{i}]" for i in range(n))
+        filt = vfilt + afilt + pairs + f"concat=n={n}:v=1:a=1[outv][outa]"
+        maps = ["-map", "[outv]", "-map", "[outa]", "-c:a", "aac"]
+    else:
+        filt = vfilt + "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"
+        maps = ["-map", "[outv]"]
     cmd = ["ffmpeg", "-y", "-loglevel", "error", *inputs,
-           "-filter_complex", filt, "-map", "[outv]",
+           "-filter_complex", filt, *maps,
            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)]
     subprocess.run(cmd, check=True)
 

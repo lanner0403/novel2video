@@ -123,8 +123,12 @@ N2V_SD_MOCK=false    N2V_SD_MODEL=stabilityai/stable-diffusion-2-1  N2V_SD_DEVIC
 N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFLOW=svd_i2v.json
 ```
 
-**SD diffusers**：`sd_client.py` 懶加載 `StableDiffusionPipeline`，pipeline 在**模組層級快取**
-（`_get_pipe`），跨階段（首幀、立繪）共用同一個，不重複載入。device `auto` 依序選 cuda > mps > cpu。
+**SD diffusers**：`sd_client.py` 懶加載 pipeline，在**模組層級快取**（`_get_pipe`），跨階段
+（首幀、立繪）共用同一個，不重複載入。device `auto` 依序選 cuda > mps > cpu。
+- **SD ↔ SDXL 切換**：`_is_sdxl` 依 `N2V_SD_PIPELINE`（auto/sd/sdxl）或 model 名稱含 `xl` 自動選用
+  `StableDiffusionPipeline` 或 `StableDiffusionXLPipeline`。換 SDXL 記得把尺寸改成 1024 系。
+- **VAE（SDXL 必要）**：`N2V_SD_VAE` 可掛外掛 VAE；`_resolve_vae` 在 SDXL+fp16 且未指定時自動套
+  `madebyollin/sdxl-vae-fp16-fix`（原生 SDXL VAE 在 fp16 會出黑圖）。cache key 含 pipeline 型別與 VAE，切換會重載。
 
 **ComfyUI workflow 模板**：把 ComfyUI「Save (API Format)」匯出的 json 放進 `backend/workflows/`，
 並把 LoadImage 的 `image` 改成 `%IMAGE%`、CLIPTextEncode 的 `text` 改成 `%PROMPT%`，後端執行時自動替換。

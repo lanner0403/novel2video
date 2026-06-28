@@ -39,25 +39,50 @@ def _detect_device(requested: str) -> str:
     return "cpu"
 
 
+def _is_sdxl(cfg) -> bool:
+    """判斷該用 SDXL pipeline：pipeline=sdxl 強制，auto 時看 model 名稱是否含 'xl'。"""
+    mode = (cfg.pipeline or "auto").lower()
+    if mode == "sdxl":
+        return True
+    if mode == "sd":
+        return False
+    return "xl" in cfg.model.lower()
+
+
+def _resolve_vae(cfg, sdxl: bool, dtype) -> str:
+    """決定要載入的 VAE：明確指定優先；SDXL+fp16 留空時自動套用 fp16-fix 以免黑圖。"""
+    import torch
+    if cfg.vae:
+        return cfg.vae
+    if sdxl and dtype == torch.float16:
+        return "madebyollin/sdxl-vae-fp16-fix"
+    return ""
+
+
 def _get_pipe(cfg) -> Any:
-    """取得（或建立）快取的 diffusers pipeline。"""
+    """取得（或建立）快取的 diffusers pipeline（依 model 切換 SD / SDXL，必要時掛 VAE）。"""
     global _PIPE, _PIPE_KEY
     device = _detect_device(cfg.device)
-    key = (cfg.model, device)
+    sdxl = _is_sdxl(cfg)
+    # MPS/CPU 上 float16 易出黑圖，統一用 float32 較穩定
+    import torch
+    dtype = torch.float32 if device in ("cpu", "mps") else torch.float16
+    vae_id = _resolve_vae(cfg, sdxl, dtype)
+    key = (cfg.model, device, sdxl, vae_id)
     if _PIPE is not None and _PIPE_KEY == key:
         return _PIPE
 
-    import torch
-    from diffusers import StableDiffusionPipeline
+    from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, AutoencoderKL
 
-    # MPS/CPU 上 float16 易出黑圖，統一用 float32 較穩定
-    dtype = torch.float32 if device in ("cpu", "mps") else torch.float16
-    pipe = StableDiffusionPipeline.from_pretrained(
-        cfg.model,
-        torch_dtype=dtype,
-        safety_checker=None,
-        requires_safety_checker=False,
-    ).to(device)
+    kwargs: dict = {"torch_dtype": dtype}
+    if vae_id:
+        kwargs["vae"] = AutoencoderKL.from_pretrained(vae_id, torch_dtype=dtype)
+    if not sdxl:
+        # SDXL pipeline 不接受 safety_checker 參數
+        kwargs.update(safety_checker=None, requires_safety_checker=False)
+
+    Pipe = StableDiffusionXLPipeline if sdxl else StableDiffusionPipeline
+    pipe = Pipe.from_pretrained(cfg.model, **kwargs).to(device)
     pipe.enable_attention_slicing()
     if device == "cuda":
         try:

@@ -55,6 +55,11 @@ class SDSettings:
     # 本地 Stable Diffusion，改用 HuggingFace diffusers 直接在本機推理（不再走 A1111 WebUI）。
     # mock=True 時用 Pillow 佔位圖；mock=False 時懶加載 diffusers pipeline 生圖。
     model: str = os.getenv("N2V_SD_MODEL", "stabilityai/stable-diffusion-2-1")
+    # pipeline 類型：auto（依 model 名稱含 "xl" 自動判斷）/ sd / sdxl
+    pipeline: str = os.getenv("N2V_SD_PIPELINE", "auto")
+    # 外掛 VAE 模型 id 或本地路徑。SDXL 用 fp16 時必要（原生 VAE 會出黑圖），
+    # 留空且為 SDXL+fp16 時自動套用 madebyollin/sdxl-vae-fp16-fix。
+    vae: str = os.getenv("N2V_SD_VAE", "")
     width: int = int(os.getenv("N2V_SD_WIDTH", "768"))
     height: int = int(os.getenv("N2V_SD_HEIGHT", "1344"))  # 9:16 直式
     steps: int = int(os.getenv("N2V_SD_STEPS", "30"))

@@ -96,6 +96,8 @@ data/projects/{pid}/
   聯集去重（修掉舊版 `full[:6000]` 截斷會漏後段角色的問題）；`_normalize_card` 補欄位、aliases 強制成 list。
 - **分鏡分批**：`run_storyboard` 依 `N2V_STORYBOARD_BATCH`（預設 8）把段落切批分送 LLM，
   `_normalize_shot` 以實際段落為準補齊 id/segment_index 與缺漏欄位（LLM 殘缺/亂序也能一段一鏡頭）。
+  單批 LLM 逾時或回傳壞 JSON 時退回啟發式（只降級該批、不讓整步崩）；
+  `_loads_loose` 容忍 ```json``` 圍欄、前後雜訊與尾逗號。
 - **立繪 seed 一致性**：`sd_first_frame` 從專案池查角色 seed，含該角色的首幀沿用，降低成像偏移。
 
 ## API

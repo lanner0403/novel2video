@@ -87,12 +87,15 @@ def _extract_characters(llm: LLMClient, segments: list[dict]) -> list[dict]:
     merged: dict[str, dict] = {}
     for segs in batches:
         chunk = "\n".join(s["text"] for s in segs)
-        sb = llm.generate_json(
-            system=_CHAR_SYSTEM,
-            user=chunk[:6000],
-            mock_builder=lambda c=chunk: {"characters": _mock_cards(c)},
-        )
-        raw = sb.get("characters", sb) if isinstance(sb, dict) else sb
+        try:
+            sb = llm.generate_json(
+                system=_CHAR_SYSTEM,
+                user=chunk[:6000],
+                mock_builder=lambda c=chunk: {"characters": _mock_cards(c)},
+            )
+            raw = sb.get("characters", sb) if isinstance(sb, dict) else sb
+        except Exception:  # noqa: BLE001 — 壞 JSON / 逾時：該批退回啟發式
+            raw = _mock_cards(chunk)
         for item in (raw if isinstance(raw, list) else []):
             card = _normalize_card(item)
             if not card:
@@ -228,16 +231,25 @@ def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
 
 
 def _storyboard_batch(llm: LLMClient, segs: list[dict], characters: list[dict],
-                      char_lookup: dict) -> list[dict]:
-    """對一批段落產生分鏡，回傳正規化後、與段落一一對應的鏡頭。"""
-    sb = llm.generate_json(
-        system=_SB_SYSTEM,
-        user="角色：\n" + str(characters)[:2000] + "\n\n段落：\n"
-             + "\n".join(f'{s["index"]}. {s["text"]}' for s in segs)[:6000],
-        mock_builder=lambda: {"shots": [_mock_shot(s, char_lookup) for s in segs]},
-    )
-    raw = sb.get("shots", sb) if isinstance(sb, dict) else sb
-    raw = raw if isinstance(raw, list) else []
+                      char_lookup: dict, ch: Chapter | None = None) -> list[dict]:
+    """對一批段落產生分鏡，回傳正規化後、與段落一一對應的鏡頭。
+
+    該批 LLM 逾時或回傳壞 JSON 時，退回啟發式（_normalize_shot(None,...) 等同 _mock_shot），
+    只讓這批降級、不讓整個分鏡階段崩潰。
+    """
+    try:
+        sb = llm.generate_json(
+            system=_SB_SYSTEM,
+            user="角色：\n" + str(characters)[:2000] + "\n\n段落：\n"
+                 + "\n".join(f'{s["index"]}. {s["text"]}' for s in segs)[:6000],
+            mock_builder=lambda: {"shots": [_mock_shot(s, char_lookup) for s in segs]},
+        )
+        raw = sb.get("shots", sb) if isinstance(sb, dict) else sb
+        raw = raw if isinstance(raw, list) else []
+    except Exception as e:  # noqa: BLE001 — 壞 JSON / 逾時都降級處理
+        if ch is not None:
+            ch.log(f"⚠ 分鏡批次改用啟發式（LLM 失敗：{type(e).__name__}: {e}）")
+        raw = []
     by_idx = {s.get("segment_index"): s for s in raw if isinstance(s, dict)}
     out = []
     for pos, seg in enumerate(segs):
@@ -261,7 +273,7 @@ def run_storyboard(project: Project, ch: Chapter, options: dict) -> dict:
 
     shots: list[dict] = []
     for bi, segs in enumerate(batches):
-        shots.extend(_storyboard_batch(llm, segs, characters, char_lookup))
+        shots.extend(_storyboard_batch(llm, segs, characters, char_lookup, ch))
         if len(batches) > 1:
             ch.log(f"分鏡批次 {bi + 1}/{len(batches)} 完成（累計 {len(shots)} 鏡頭）")
 

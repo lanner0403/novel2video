@@ -66,10 +66,19 @@ class LLMClient:
 
 
 def _loads_loose(text: str) -> Any:
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}|\[.*\]", text, re.S)
-        if m:
-            return json.loads(m.group(0))
-        raise
+    """盡量把 LLM 回應解析成 JSON：容忍 ```json 圍欄、前後雜訊、尾逗號。"""
+    s = (text or "").strip()
+    if s.startswith("```"):                       # 去掉 markdown 圍欄
+        s = re.sub(r"^```[a-zA-Z]*", "", s).strip().strip("`").strip()
+    candidates = [s]
+    m = re.search(r"\{.*\}|\[.*\]", s, re.S)       # 抓出最外層物件/陣列
+    if m:
+        candidates.append(m.group(0))
+    last_err: Exception | None = None
+    for c in candidates:
+        for variant in (c, re.sub(r",(\s*[}\]])", r"\1", c)):   # 去掉尾逗號
+            try:
+                return json.loads(variant)
+            except json.JSONDecodeError as e:
+                last_err = e
+    raise last_err if last_err else json.JSONDecodeError("無法解析", s, 0)

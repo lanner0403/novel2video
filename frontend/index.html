@@ -162,6 +162,13 @@ button{font-family:inherit;cursor:pointer}
   border:1px solid var(--amber-dim);color:var(--amber);padding:8px 16px;border-radius:6px;
   font-size:12px;z-index:30;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
+/* 點圖放大（lightbox）*/
+.zoomable{cursor:zoom-in}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.86);display:none;align-items:center;
+  justify-content:center;z-index:40;cursor:zoom-out}
+.lightbox.show{display:flex}
+.lightbox img{max-width:92vw;max-height:92vh;border-radius:8px;box-shadow:0 10px 50px rgba(0,0,0,.7)}
+.lightbox .hintx{position:fixed;top:16px;right:20px;color:var(--ink-dim);font-family:var(--mono);font-size:12px}
 
 .shot{border:1px solid var(--line);border-radius:8px;margin-bottom:12px;overflow:hidden;background:var(--panel2)}
 .shot .sh{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg);font-size:12px}
@@ -228,6 +235,12 @@ button{font-family:inherit;cursor:pointer}
       <button class="newbtn" style="margin:0;padding:9px 18px" onclick="createProject()">建立</button>
     </div>
   </div>
+</div>
+
+<!-- 點圖放大 -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <div class="hintx">點任意處或 Esc 關閉</div>
+  <img id="lightbox-img" src="" alt="">
 </div>
 
 <!-- 編輯角色卡 -->
@@ -407,7 +420,7 @@ async function renderChar(el){
     const aliases = (c.aliases&&c.aliases.length) ? ' · '+c.aliases.map(esc).join('/') : '';
     return `<div class="char">
       <div class="pcol">
-        <img id="ch-${i}-portrait" class="portrait" src="${hasP?url:''}" style="${hasP?'':'display:none'}" loading="lazy">
+        <img id="ch-${i}-portrait" class="portrait zoomable" src="${hasP?url:''}" style="${hasP?'':'display:none'}" loading="lazy" onclick="openLightbox(this.src)">
         <div id="ch-${i}-ph" class="portrait ph" style="${hasP?'display:none':''}">無立繪</div>
       </div>
       <div class="info">
@@ -545,7 +558,7 @@ async function renderBoard(el){
   el.innerHTML = `<div class="hint" style="padding:0 2px 10px;font-size:11px;color:var(--ink-faint)">
     可逐一編輯鏡頭；「重生首幀／片段」會先存檔再只重生這一個鏡頭。</div>` + a.data.map((s,i)=>{
     const ff=s.first_frame_prompt||{}, cp=s.comfy_prompt||{};
-    const fimg = frames.has(`${s.id}.png`) ? `<img src="${base}/frames/${s.id}.png?t=${Date.now()}">` : '';
+    const fimg = frames.has(`${s.id}.png`) ? `<img class="zoomable" src="${base}/frames/${s.id}.png?t=${Date.now()}" onclick="openLightbox(this.src)">` : '';
     const cvid = clips.has(`${s.id}.mp4`) ? `<video src="${base}/clips/${s.id}.mp4?t=${Date.now()}" controls muted></video>` : '';
     return `<div class="shot">
       <div class="sh"><span class="id">${s.id}</span><span>${esc(s.summary||'')}</span>
@@ -603,7 +616,7 @@ function renderFrame(el){
   el.innerHTML = `<div class="grid">${f.map(n=>{
     const id=n.replace(/\.png$/,'');
     return `<div class="itemregen">
-      <img src="${base}/frames/${n}?t=${Date.now()}" loading="lazy">
+      <img class="zoomable" src="${base}/frames/${n}?t=${Date.now()}" loading="lazy" onclick="openLightbox(this.src)">
       <button class="btn-sm" onclick="regenFrameOnly('${id}')">重生</button></div>`;
   }).join("")}</div>`;
 }
@@ -771,6 +784,14 @@ async function resetSeed(){
     toast("專案 seed 已重設為 "+r.seed);
   }catch(e){ alert("重設失敗："+e.message); }
 }
+
+function openLightbox(src){
+  if(!src) return;
+  document.getElementById("lightbox-img").src = src;
+  document.getElementById("lightbox").classList.add("show");
+}
+function closeLightbox(){ document.getElementById("lightbox").classList.remove("show"); }
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeLightbox(); });
 
 let toastTimer=null;
 function toast(msg){

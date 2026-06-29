@@ -22,12 +22,15 @@ NEGATIVE = ("lowres, bad anatomy, bad hands, text, error, missing fingers, "
             "extra digit, fewer digits, cropped, worst quality, low quality, "
             "jpeg artifacts, signature, watermark, blurry")
 
-STYLE = "masterpiece, best quality, highly detailed, cinematic lighting, anime style"
-# 角色卡立繪的正向品質詞（放最前，確保不被 CLIP 77 token 截掉）
-PORTRAIT_QUALITY = ("masterpiece, best quality, newest, absurdres, highres, detailed eyes, "
-                    "beautiful, perfect eyes, glossy material render, semi-realistic")
-# 立繪框景詞（簡短，不再疊一份 STYLE，組裝時去重）
+# 全專案統一的正向品質詞（立繪與首幀共用，放最前確保不被 CLIP 77 token 截掉）
+QUALITY = ("masterpiece, best quality, newest, absurdres, highres, detailed eyes, "
+           "beautiful, perfect eyes, glossy material render, semi-realistic")
+STYLE = QUALITY   # 相容舊引用
+# 立繪框景詞（簡短，不再疊一份品質詞，組裝時去重）
 PORTRAIT_STYLE = "full body, standing pose, plain background, front view"
+# 與 semi-realistic 衝突、組 prompt 時要濾掉的風格詞（不分大小寫，整段比對）
+_CONFLICT_STYLES = {"anime style", "anime", "2d", "cartoon", "manga", "comic",
+                    "flat color", "flat colors", "cel shading", "chibi"}
 CAMERAS = ["medium shot", "close-up", "wide establishing shot", "over-the-shoulder shot",
            "low angle shot", "bird's-eye view"]
 MOTIONS = ["slow push-in", "gentle pan left", "subtle handheld sway",
@@ -35,8 +38,8 @@ MOTIONS = ["slow push-in", "gentle pan left", "subtle handheld sway",
 
 
 def _portrait_prompt(card: dict) -> str:
-    """組角色立繪 prompt：品質詞在前（必留）、角色外貌次之、框景最後，去重避免 CLIP 截斷。"""
-    return _dedupe_prompt(f'{PORTRAIT_QUALITY}, {card.get("sd_prompt", "")}, {PORTRAIT_STYLE}')
+    """組角色立繪 prompt：品質詞在前（必留）、角色外貌次之、框景最後，去重＋濾衝突風格。"""
+    return _dedupe_prompt(f'{QUALITY}, {card.get("sd_prompt", "")}, {PORTRAIT_STYLE}')
 
 
 def regenerate_portrait(project: Project, name: str, seed: int | None = None) -> int:
@@ -55,17 +58,18 @@ def regenerate_portrait(project: Project, name: str, seed: int | None = None) ->
 
 
 def _dedupe_prompt(text: str, max_terms: int = 24) -> str:
-    """以逗號為單位去重（不分大小寫、保留順序）並截斷，避免 CLIP 77 token 超限被截掉重點。"""
+    """以逗號為單位去重（不分大小寫、保留順序）、濾掉衝突風格詞並截斷，避免 CLIP 77 token 超限。"""
     seen: set[str] = set()
     out: list[str] = []
     for term in text.split(","):
         t = term.strip()
         key = t.lower()
-        if t and key not in seen:
-            seen.add(key)
-            out.append(t)
-            if len(out) >= max_terms:
-                break
+        if not t or key in seen or key in _CONFLICT_STYLES:
+            continue
+        seen.add(key)
+        out.append(t)
+        if len(out) >= max_terms:
+            break
     return ", ".join(out)
 
 

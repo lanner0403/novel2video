@@ -230,6 +230,22 @@ button{font-family:inherit;cursor:pointer}
   </div>
 </div>
 
+<!-- 編輯角色卡 -->
+<div class="modal" id="modal-char">
+  <div class="dialog">
+    <h3>編輯角色卡 · <span id="mch-name"></span></h3>
+    <label class="fld"><span>別名（逗號分隔）</span><input id="mch-aliases"></label>
+    <label class="fld"><span>外貌</span><textarea id="mch-appearance" style="min-height:60px"></textarea></label>
+    <label class="fld"><span>性格</span><textarea id="mch-personality" style="min-height:60px"></textarea></label>
+    <label class="fld"><span>SD 提示詞（英文，影響立繪與首幀）</span><textarea id="mch-sd_prompt" style="min-height:60px"></textarea></label>
+    <div class="row">
+      <button class="btn-sm" onclick="closeModal('modal-char')">取消</button>
+      <button class="btn-sm" onclick="saveCharEdit(false)">只儲存</button>
+      <button class="newbtn" style="margin:0;padding:9px 16px" onclick="saveCharEdit(true)">儲存並重生立繪</button>
+    </div>
+  </div>
+</div>
+
 <!-- 新增章節 -->
 <div class="modal" id="modal-chap">
   <div class="dialog">
@@ -250,6 +266,8 @@ let proj = null;       // 目前專案 view
 let chap = null;       // 目前章節 view
 let pollTimer = null;
 let charPollTimer = null;   // 立繪重生輪詢
+let charsCache = [];        // 目前角色清單（編輯對話框查用）
+let editingChar = null;     // 正在編輯的角色名
 let activeTab = "char";
 
 async function api(path, opt){ const r = await fetch(API+path, opt); if(!r.ok){throw new Error((await r.json()).detail||r.status)} return r.json(); }
@@ -383,35 +401,55 @@ async function renderChar(el){
   el.innerHTML = head + characters.map((c,i)=>{
     const url = `${API}/api/projects/${proj.id}/file/${c.portrait}?t=${Date.now()}`;
     const hasP = c.portrait_available;
+    const aliases = (c.aliases&&c.aliases.length) ? ' · '+c.aliases.map(esc).join('/') : '';
     return `<div class="char">
       <div class="pcol">
         <img id="ch-${i}-portrait" class="portrait" src="${hasP?url:''}" style="${hasP?'':'display:none'}" loading="lazy">
         <div id="ch-${i}-ph" class="portrait ph" style="${hasP?'display:none':''}">無立繪</div>
-        <button class="btn-sm" id="ch-${i}-regen" ${c.regenerating?'disabled':''}
-          onclick="regenPortrait('${ja(c.name)}')">${c.regenerating?'⋯ 生成中':'重生立繪'}</button>
       </div>
       <div class="info">
-        <div class="cn">${esc(c.name)}
+        <div class="cn">${esc(c.name)}${aliases}
           <label><input type="checkbox" class="reuse" data-name="${esc(c.name)}" checked> 沿用</label></div>
-        <label class="fld"><span>別名（逗號分隔）</span><input id="ch-${i}-aliases" value="${esc((c.aliases||[]).join(', '))}"></label>
-        <label class="fld"><span>外貌</span><textarea id="ch-${i}-appearance">${esc(c.appearance||'')}</textarea></label>
-        <label class="fld"><span>性格</span><textarea id="ch-${i}-personality">${esc(c.personality||'')}</textarea></label>
-        <label class="fld"><span>SD 提示詞（英文，影響立繪與首幀）</span><textarea id="ch-${i}-sd_prompt">${esc(c.sd_prompt||'')}</textarea></label>
-        <button class="btn-sm" onclick="saveCharacter('${ja(c.name)}',${i})">儲存修改</button>
+        <div class="desc">${esc(c.appearance||'')}　${esc(c.personality||'')}</div>
+        <div class="cp">${esc(c.sd_prompt||'')}</div>
+        <div class="shotacts">
+          <button class="btn-sm" onclick="openCharEdit('${ja(c.name)}')">✎ 編輯</button>
+          <button class="btn-sm" id="ch-${i}-regen" ${c.regenerating?'disabled':''}
+            onclick="regenPortrait('${ja(c.name)}')">${c.regenerating?'⋯ 生成中':'重生立繪'}</button>
+        </div>
       </div></div>`;
   }).join("");
 }
-async function saveCharacter(name, i){
-  const v = id => document.getElementById(`ch-${i}-${id}`).value;
+// 點「編輯」開對話框，自行輸入內容後可只儲存、或儲存並重生立繪
+function openCharEdit(name){
+  const c = charsCache.find(x=>x.name===name);
+  if(!c) return;
+  editingChar = name;
+  document.getElementById("mch-name").textContent = name;
+  document.getElementById("mch-aliases").value = (c.aliases||[]).join(", ");
+  document.getElementById("mch-appearance").value = c.appearance||"";
+  document.getElementById("mch-personality").value = c.personality||"";
+  document.getElementById("mch-sd_prompt").value = c.sd_prompt||"";
+  document.getElementById("modal-char").classList.add("show");
+}
+async function saveCharEdit(regen){
+  const val = id => document.getElementById(`mch-${id}`).value;
   const body = {
-    aliases: v("aliases").split(/[,，]/).map(s=>s.trim()).filter(Boolean),
-    appearance: v("appearance"), personality: v("personality"), sd_prompt: v("sd_prompt"),
+    aliases: val("aliases").split(/[,，]/).map(s=>s.trim()).filter(Boolean),
+    appearance: val("appearance"), personality: val("personality"), sd_prompt: val("sd_prompt"),
   };
   try{
-    await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(name)}`,
+    await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(editingChar)}`,
       {method:"PUT",headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    toast("角色卡已儲存（重生立繪才會套用新提示詞）");
-  }catch(e){ alert("儲存失敗："+e.message); }
+    if(regen){
+      await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(editingChar)}/regenerate`,
+        {method:"POST",headers:{'Content-Type':'application/json'},body:"{}"});
+    }
+    closeModal("modal-char");
+    toast(regen ? "已儲存，開始重生立繪…" : "角色卡已儲存");
+    await renderChar(document.getElementById("tabbody"));
+    if(regen) startCharPoll();
+  }catch(e){ alert("失敗："+e.message); }
 }
 async function regenPortrait(name){
   try{

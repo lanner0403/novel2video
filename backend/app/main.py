@@ -11,8 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import settings, ROOT
-from .pipeline.project import Project, Chapter, STAGES
+from .pipeline.project import Project, Chapter, STAGES, slugify
 from .pipeline import orchestrator as orch
+from .pipeline import stages_text as st
 
 app = FastAPI(title="小說轉影片流水線")
 
@@ -40,6 +41,17 @@ class RunRequest(BaseModel):
     start: str | None = None       # 從此階段往後跑
     only: str | None = None        # 只跑此階段
     options: dict = {}             # 階段參數，如 character_cards 的 {"regenerate": [...]}
+
+
+class EditCharacter(BaseModel):
+    appearance: str | None = None
+    personality: str | None = None
+    sd_prompt: str | None = None
+    aliases: list[str] | None = None
+
+
+class RegenPortrait(BaseModel):
+    seed: int | None = None
 
 
 # ---------- 後設 ----------
@@ -146,6 +158,51 @@ def get_chapter_artifact(pid: str, cid: str, key: str) -> JSONResponse:
     return JSONResponse({"available": True, "data": ch.read_json(name)})
 
 
+@app.put("/api/projects/{pid}/chapters/{cid}/shots/{shot_id}")
+def edit_shot(pid: str, cid: str, shot_id: str, body: dict) -> dict:
+    """編輯單一鏡頭（合併允許的欄位）。改了 prompt 後可再單獨重生首幀/片段。"""
+    p = _load(pid)
+    ch = _load_chapter(p, cid)
+    shots = ch.read_json("storyboard.json")
+    shot = next((s for s in shots if s.get("id") == shot_id), None)
+    if shot is None:
+        raise HTTPException(404, "找不到鏡頭")
+    for k in ("summary", "characters", "first_frame_prompt", "comfy_prompt",
+              "narration", "dialogue", "voice_tone", "duration"):
+        if k in body:
+            shot[k] = body[k]
+    ch.write_json("storyboard.json", shots)
+    return shot
+
+
+@app.post("/api/projects/{pid}/chapters/{cid}/shots/{shot_id}/frame")
+def regenerate_frame(pid: str, cid: str, shot_id: str) -> dict:
+    """重生單一鏡頭首幀：刪該檔後跑 sd_first_frame（其餘已存在者會被跳過）。"""
+    p = _load(pid)
+    ch = _load_chapter(p, cid)
+    if orch.is_running(pid, cid):
+        raise HTTPException(409, "此章節正在執行中，請稍候")
+    if not _shot_exists(ch, shot_id):
+        raise HTTPException(404, "找不到鏡頭")
+    (ch.dir / "frames" / f"{shot_id}.png").unlink(missing_ok=True)
+    orch.run_stages_async(pid, cid, only="sd_first_frame")
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/chapters/{cid}/shots/{shot_id}/clip")
+def regenerate_clip(pid: str, cid: str, shot_id: str) -> dict:
+    """重生單一鏡頭片段：刪該檔後跑 comfy_video（其餘已存在者會被跳過）。"""
+    p = _load(pid)
+    ch = _load_chapter(p, cid)
+    if orch.is_running(pid, cid):
+        raise HTTPException(409, "此章節正在執行中，請稍候")
+    if not _shot_exists(ch, shot_id):
+        raise HTTPException(404, "找不到鏡頭")
+    (ch.dir / "clips" / f"{shot_id}.mp4").unlink(missing_ok=True)
+    orch.run_stages_async(pid, cid, only="comfy_video")
+    return {"ok": True}
+
+
 @app.get("/api/projects/{pid}/chapters/{cid}/file/{path:path}")
 def get_chapter_file(pid: str, cid: str, path: str) -> FileResponse:
     p = _load(pid)
@@ -169,7 +226,38 @@ def get_characters(pid: str) -> dict:
         rel = c.get("portrait") or p.portrait_rel(c["name"])
         c["portrait"] = rel
         c["portrait_available"] = (p.dir / rel).exists()
+        c["regenerating"] = orch.is_running_key(f"{pid}:char:{slugify(c['name'])}")
     return {"characters": cards}
+
+
+@app.put("/api/projects/{pid}/characters/{name}")
+def edit_character(pid: str, name: str, body: EditCharacter) -> dict:
+    p = _load(pid)
+    cards = p.read_characters()
+    card = next((c for c in cards if c["name"] == name), None)
+    if card is None:
+        raise HTTPException(404, "找不到角色")
+    for f in ("appearance", "personality", "sd_prompt"):
+        v = getattr(body, f)
+        if v is not None:
+            card[f] = v
+    if body.aliases is not None:
+        card["aliases"] = body.aliases
+    p.write_characters(cards)
+    return card
+
+
+@app.post("/api/projects/{pid}/characters/{name}/regenerate")
+def regenerate_character_portrait(pid: str, name: str, body: RegenPortrait) -> dict:
+    p = _load(pid)
+    if not any(c["name"] == name for c in p.read_characters()):
+        raise HTTPException(404, "找不到角色")
+    key = f"{pid}:char:{slugify(name)}"
+    if orch.is_running_key(key):
+        raise HTTPException(409, "此角色立繪正在生成中")
+    seed = body.seed
+    orch.run_task_async(key, lambda: st.regenerate_portrait(p, name, seed))
+    return {"ok": True}
 
 
 @app.get("/api/projects/{pid}/file/{path:path}")
@@ -192,6 +280,13 @@ def _load_chapter(p: Project, cid: str) -> Chapter:
         return p.get_chapter(cid)
     except FileNotFoundError:
         raise HTTPException(404, "找不到章節")
+
+
+def _shot_exists(ch: Chapter, shot_id: str) -> bool:
+    """確認 shot_id 真的在分鏡中（兼作檔名防護，避免用任意字串拼路徑）。"""
+    if not ch.has("storyboard.json"):
+        return False
+    return any(s.get("id") == shot_id for s in ch.read_json("storyboard.json"))
 
 
 def _safe_file(base, path: str) -> FileResponse:

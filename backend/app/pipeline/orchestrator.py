@@ -45,6 +45,30 @@ def is_running(pid: str, cid: str) -> bool:
     return _key(pid, cid) in _running
 
 
+def is_running_key(key: str) -> bool:
+    return key in _running
+
+
+def run_task_async(key: str, fn: Callable[[], None]) -> bool:
+    """以任意 key 為單位在背景跑一個工作（如單一角色立繪重生）。已在跑回 False。"""
+    with _lock:
+        if key in _running:
+            return False
+        _running.add(key)
+
+    def _worker() -> None:
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 — 單項重生失敗不影響其他
+            pass
+        finally:
+            with _lock:
+                _running.discard(key)
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return True
+
+
 def plan_stages(start: str | None, only: str | None) -> list[str]:
     """決定要執行哪些階段。only：只跑此階段；start：從此往後；皆 None：全部。"""
     if only:

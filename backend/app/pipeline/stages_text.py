@@ -31,6 +31,25 @@ MOTIONS = ["slow push-in", "gentle pan left", "subtle handheld sway",
            "slow dolly out", "static with ambient motion"]
 
 
+def _portrait_prompt(card: dict) -> str:
+    """組角色立繪 prompt：框景在前、角色外貌次之、風格最後，去重避免 CLIP 截斷。"""
+    return _dedupe_prompt(f'{PORTRAIT_STYLE}, {card.get("sd_prompt", "")}, {STYLE}')
+
+
+def regenerate_portrait(project: Project, name: str, seed: int | None = None) -> int:
+    """重生單一角色的立繪（用其現有 sd_prompt），更新 seed 並寫回共用池。回傳採用的 seed。"""
+    cards = project.read_characters()
+    card = next((c for c in cards if c["name"] == name), None)
+    if card is None:
+        raise FileNotFoundError(f"共用池找不到角色：{name}")
+    seed = int(seed) if seed else random.randint(1, 2_000_000_000)
+    SDClient().txt2img(_portrait_prompt(card), NEGATIVE, project.portrait_path(name), seed=seed)
+    card["seed"] = seed
+    card["portrait"] = project.portrait_rel(name)
+    project.write_characters(cards)
+    return seed
+
+
 def _dedupe_prompt(text: str, max_terms: int = 24) -> str:
     """以逗號為單位去重（不分大小寫、保留順序）並截斷，避免 CLIP 77 token 超限被截掉重點。"""
     seen: set[str] = set()
@@ -159,9 +178,7 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
         seed = random.randint(1, 2_000_000_000)   # (重)生成一律給新種子
         card["seed"] = seed
         card["portrait"] = project.portrait_rel(name)
-        # 框景詞在前（必留），角色外貌次之，風格最後；去重避免超過 CLIP 77 token
-        portrait_prompt = _dedupe_prompt(
-            f'{PORTRAIT_STYLE}, {card.get("sd_prompt", "")}, {STYLE}')
+        portrait_prompt = _portrait_prompt(card)
         out = project.portrait_path(name)
         try:
             sd.txt2img(portrait_prompt, NEGATIVE, out, seed=seed)

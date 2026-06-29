@@ -142,6 +142,26 @@ button{font-family:inherit;cursor:pointer}
 .char .desc{font-size:12px;color:var(--ink-dim);margin-top:6px}
 .char .cp{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:6px;
   background:var(--bg);padding:8px;border-radius:5px;word-break:break-all}
+.pcol{display:flex;flex-direction:column;gap:6px;align-items:stretch;width:96px;flex:0 0 96px}
+.pcol .portrait{width:96px}
+.pcol .btn-sm{font-size:11px;padding:5px 6px;text-align:center}
+/* 可編輯欄位（角色卡 / 鏡頭共用）*/
+.fld{display:block;margin-bottom:8px}
+.fld>span{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  color:var(--ink-faint);margin-bottom:3px}
+.fld input,.fld textarea{width:100%;background:var(--bg);border:1px solid var(--line);
+  border-radius:5px;color:var(--ink);padding:6px 8px;font-size:12px;font-family:var(--mono)}
+.fld input:focus,.fld textarea:focus{outline:none;border-color:var(--amber-dim)}
+.fld textarea{min-height:44px;resize:vertical;line-height:1.5}
+.shotacts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.shotprev{display:flex;gap:8px;margin-top:10px}
+.shotprev img,.shotprev video{width:88px;border-radius:5px;border:1px solid var(--line);aspect-ratio:9/16;object-fit:cover;background:#000}
+.itemregen{display:flex;flex-direction:column;gap:4px;align-items:center}
+.itemregen .btn-sm{font-size:11px;padding:4px 8px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);
+  border:1px solid var(--amber-dim);color:var(--amber);padding:8px 16px;border-radius:6px;
+  font-size:12px;z-index:30;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
 
 .shot{border:1px solid var(--line);border-radius:8px;margin-bottom:12px;overflow:hidden;background:var(--panel2)}
 .shot .sh{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--bg);font-size:12px}
@@ -229,6 +249,7 @@ let meta = null;       // settings + stages
 let proj = null;       // 目前專案 view
 let chap = null;       // 目前章節 view
 let pollTimer = null;
+let charPollTimer = null;   // 立繪重生輪詢
 let activeTab = "char";
 
 async function api(path, opt){ const r = await fetch(API+path, opt); if(!r.ok){throw new Error((await r.json()).detail||r.status)} return r.json(); }
@@ -359,20 +380,68 @@ async function renderChar(el){
     el.innerHTML = head + '<div class="note">尚無共用角色。先執行「角色卡產生」或按上方按鈕。</div>';
     return;
   }
-  el.innerHTML = head + characters.map(c=>{
+  el.innerHTML = head + characters.map((c,i)=>{
     const url = `${API}/api/projects/${proj.id}/file/${c.portrait}?t=${Date.now()}`;
-    const portrait = c.portrait_available
-      ? `<img class="portrait" src="${url}" loading="lazy">`
-      : `<div class="portrait ph">無立繪</div>`;
+    const hasP = c.portrait_available;
     return `<div class="char">
-      ${portrait}
+      <div class="pcol">
+        <img id="ch-${i}-portrait" class="portrait" src="${hasP?url:''}" style="${hasP?'':'display:none'}" loading="lazy">
+        <div id="ch-${i}-ph" class="portrait ph" style="${hasP?'display:none':''}">無立繪</div>
+        <button class="btn-sm" id="ch-${i}-regen" ${c.regenerating?'disabled':''}
+          onclick="regenPortrait('${ja(c.name)}')">${c.regenerating?'⋯ 生成中':'重生立繪'}</button>
+      </div>
       <div class="info">
-        <div class="cn">${esc(c.name)}${c.aliases&&c.aliases.length?' · '+c.aliases.map(esc).join('/'):''}
+        <div class="cn">${esc(c.name)}
           <label><input type="checkbox" class="reuse" data-name="${esc(c.name)}" checked> 沿用</label></div>
-        <div class="desc">${esc(c.appearance||'')}　${esc(c.personality||'')}</div>
-        <div class="cp">${esc(c.sd_prompt||'')}</div>
+        <label class="fld"><span>別名（逗號分隔）</span><input id="ch-${i}-aliases" value="${esc((c.aliases||[]).join(', '))}"></label>
+        <label class="fld"><span>外貌</span><textarea id="ch-${i}-appearance">${esc(c.appearance||'')}</textarea></label>
+        <label class="fld"><span>性格</span><textarea id="ch-${i}-personality">${esc(c.personality||'')}</textarea></label>
+        <label class="fld"><span>SD 提示詞（英文，影響立繪與首幀）</span><textarea id="ch-${i}-sd_prompt">${esc(c.sd_prompt||'')}</textarea></label>
+        <button class="btn-sm" onclick="saveCharacter('${ja(c.name)}',${i})">儲存修改</button>
       </div></div>`;
   }).join("");
+}
+async function saveCharacter(name, i){
+  const v = id => document.getElementById(`ch-${i}-${id}`).value;
+  const body = {
+    aliases: v("aliases").split(/[,，]/).map(s=>s.trim()).filter(Boolean),
+    appearance: v("appearance"), personality: v("personality"), sd_prompt: v("sd_prompt"),
+  };
+  try{
+    await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(name)}`,
+      {method:"PUT",headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast("角色卡已儲存（重生立繪才會套用新提示詞）");
+  }catch(e){ alert("儲存失敗："+e.message); }
+}
+async function regenPortrait(name){
+  try{
+    await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(name)}/regenerate`,
+      {method:"POST",headers:{'Content-Type':'application/json'},body:"{}"});
+    toast("開始重生立繪…"); startCharPoll();
+  }catch(e){ alert("重生失敗："+e.message); }
+}
+// 立繪重生輪詢：完成才更新該張圖，不整頁重繪以免清掉編輯中的文字
+function startCharPoll(){
+  clearInterval(charPollTimer);
+  charPollTimer = setInterval(async ()=>{
+    if(!proj || activeTab!=="char"){ clearInterval(charPollTimer); return; }
+    const {characters} = await api(`/api/projects/${proj.id}/characters`);
+    let busy = false;
+    characters.forEach((c,i)=>{
+      const btn=document.getElementById(`ch-${i}-regen`);
+      if(!btn) return;
+      if(c.regenerating){ busy=true; btn.disabled=true; btn.textContent="⋯ 生成中"; }
+      else{
+        btn.disabled=false; btn.textContent="重生立繪";
+        const img=document.getElementById(`ch-${i}-portrait`), ph=document.getElementById(`ch-${i}-ph`);
+        if(img && c.portrait_available){
+          img.src=`${API}/api/projects/${proj.id}/file/${c.portrait}?t=${Date.now()}`;
+          img.style.display=""; if(ph) ph.style.display="none";
+        }
+      }
+    });
+    if(!busy) clearInterval(charPollTimer);
+  }, 1500);
 }
 // 產生/更新角色卡：未勾選者進 regenerate 名單
 async function genCharacters(){
@@ -384,28 +453,72 @@ async function genCharacters(){
 async function renderBoard(el){
   const a = await api(`/api/projects/${proj.id}/chapters/${chap.id}/artifact/storyboard`);
   if(!a.available){ el.innerHTML='<div class="note">尚未產生分鏡</div>'; return; }
-  el.innerHTML = a.data.map(s=>{
+  const base = `${API}/api/projects/${proj.id}/chapters/${chap.id}/file`;
+  const frames = new Set(chap.files.frames), clips = new Set(chap.files.clips);
+  el.innerHTML = `<div class="hint" style="padding:0 2px 10px;font-size:11px;color:var(--ink-faint)">
+    可逐一編輯鏡頭；「重生首幀／片段」會先存檔再只重生這一個鏡頭。</div>` + a.data.map((s,i)=>{
     const ff=s.first_frame_prompt||{}, cp=s.comfy_prompt||{};
+    const fimg = frames.has(`${s.id}.png`) ? `<img src="${base}/frames/${s.id}.png?t=${Date.now()}">` : '';
+    const cvid = clips.has(`${s.id}.mp4`) ? `<video src="${base}/clips/${s.id}.mp4?t=${Date.now()}" controls muted></video>` : '';
     return `<div class="shot">
       <div class="sh"><span class="id">${s.id}</span><span>${esc(s.summary||'')}</span>
         <span class="ch">${(s.characters||[]).map(esc).join(' ')}</span></div>
       <div class="sb">
-        <div class="kv"><div class="k">首幀 prompt（SD 正向）</div><div class="v mono">${esc(ff.positive||'')}</div></div>
-        <div class="kv"><div class="k">負向</div><div class="v mono neg">${esc(ff.negative||'')}</div></div>
-        <div class="kv"><div class="k">ComfyUI 動態 / 鏡頭 / 轉場</div>
-          <div class="pillrow"><span class="pill">🎥 ${esc(cp.camera||'')}</span>
+        <label class="fld"><span>首幀 prompt（SD 正向，英文）</span><textarea id="sh-${i}-positive">${esc(ff.positive||'')}</textarea></label>
+        <input type="hidden" id="sh-${i}-negative" value="${esc(ff.negative||'')}">
+        <div class="kv"><div class="k">ComfyUI 場景 / 人物 / 鏡頭 / 運鏡 / 氛圍</div>
+          <div class="pillrow"><span class="pill">🎬 ${esc(cp.scene||'')}</span>
+            <span class="pill">👤 ${esc(cp.characters||'')}</span>
+            <span class="pill">🎥 ${esc(cp.camera||'')}</span>
             <span class="pill">🎞 ${esc(cp.motion||'')}</span>
-            <span class="pill">✂ ${esc(cp.scene_transition||'')}</span></div></div>
-        ${s.dialogue?`<div class="kv"><div class="k">對白</div><div class="v">「${esc(s.dialogue)}」</div></div>`:''}
-        <div class="kv"><div class="k">旁白</div><div class="v">${esc(s.narration||'')}</div></div>
+            <span class="pill">🌅 ${esc(cp.mood||'')}</span></div></div>
+        <label class="fld"><span>旁白（中文）</span><textarea id="sh-${i}-narration">${esc(s.narration||'')}</textarea></label>
+        <label class="fld"><span>對白（中文）</span><input id="sh-${i}-dialogue" value="${esc(s.dialogue||'')}"></label>
+        <div style="display:flex;gap:8px">
+          <label class="fld" style="flex:1"><span>語氣</span><input id="sh-${i}-voice_tone" value="${esc(s.voice_tone||'')}"></label>
+          <label class="fld" style="width:90px"><span>秒數</span><input id="sh-${i}-duration" type="number" step="0.5" value="${s.duration||4}"></label>
+        </div>
+        <div class="shotacts">
+          <button class="btn-sm" onclick="saveShotBtn('${s.id}',${i})">儲存</button>
+          <button class="btn-sm" onclick="regenFrame('${s.id}',${i})">重生首幀</button>
+          <button class="btn-sm" onclick="regenClip('${s.id}',${i})">重生片段</button>
+        </div>
+        ${(fimg||cvid)?`<div class="shotprev">${fimg}${cvid}</div>`:''}
       </div></div>`;
   }).join("");
 }
+async function saveShot(id, i){
+  const v = k => document.getElementById(`sh-${i}-${k}`).value;
+  const body = {
+    first_frame_prompt: {positive: v("positive"), negative: v("negative")},
+    narration: v("narration"), dialogue: v("dialogue"), voice_tone: v("voice_tone"),
+    duration: parseFloat(v("duration"))||4.0,
+  };
+  await api(`/api/projects/${proj.id}/chapters/${chap.id}/shots/${id}`,
+    {method:"PUT",headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+}
+async function regenFrame(id, i){
+  try{ await saveShot(id,i); await api(`/api/projects/${proj.id}/chapters/${chap.id}/shots/${id}/frame`,{method:"POST"});
+    toast(`重生首幀 ${id}…`); await selectChapter(chap.id);
+  }catch(e){ alert("重生失敗："+e.message); }
+}
+async function regenClip(id, i){
+  try{ await saveShot(id,i); await api(`/api/projects/${proj.id}/chapters/${chap.id}/shots/${id}/clip`,{method:"POST"});
+    toast(`重生片段 ${id}…`); await selectChapter(chap.id);
+  }catch(e){ alert("重生失敗："+e.message); }
+}
+async function saveShotBtn(id, i){ try{ await saveShot(id,i); toast("鏡頭已儲存"); }catch(e){ alert("儲存失敗："+e.message); } }
+
 function renderFrame(el){
   const f = chap.files.frames;
   if(!f.length){ el.innerHTML='<div class="note">尚未生成首幀</div>'; return; }
-  el.innerHTML = `<div class="grid">${f.map(n=>
-    `<img src="${API}/api/projects/${proj.id}/chapters/${chap.id}/file/frames/${n}?t=${Date.now()}" loading="lazy">`).join("")}</div>`;
+  const base = `${API}/api/projects/${proj.id}/chapters/${chap.id}/file`;
+  el.innerHTML = `<div class="grid">${f.map(n=>{
+    const id=n.replace(/\.png$/,'');
+    return `<div class="itemregen">
+      <img src="${base}/frames/${n}?t=${Date.now()}" loading="lazy">
+      <button class="btn-sm" onclick="regenFrameOnly('${id}')">重生</button></div>`;
+  }).join("")}</div>`;
 }
 function renderVideo(el){
   const base = `${API}/api/projects/${proj.id}/chapters/${chap.id}/file`;
@@ -414,14 +527,29 @@ function renderVideo(el){
     html += `<div class="final"><video src="${base}/${chap.files.output}?t=${Date.now()}" controls></video>
       <div style="text-align:center"><a class="dl" href="${base}/${chap.files.output}" download>⬇ 下載成片</a>`;
     if(chap.files.subtitle) html += `　<a class="dl" href="${base}/${chap.files.subtitle}" download>⬇ 字幕 SRT</a>`;
-    html += `</div></div><h2 style="border:none;padding:16px 0 6px;color:var(--ink-dim);font-size:12px;letter-spacing:.1em">片段</h2>`;
+    html += `</div></div><h2 style="border:none;padding:16px 0 6px;color:var(--ink-dim);font-size:12px;letter-spacing:.1em">片段（可單獨重生）</h2>`;
   }
   const c = chap.files.clips;
   if(c.length){
-    html += `<div class="gridv">${c.map(n=>
-      `<video src="${base}/clips/${n}?t=${Date.now()}" controls muted></video>`).join("")}</div>`;
+    html += `<div class="gridv">${c.map(n=>{
+      const id=n.replace(/\.mp4$/,'');
+      return `<div class="itemregen">
+        <video src="${base}/clips/${n}?t=${Date.now()}" controls muted></video>
+        <button class="btn-sm" onclick="regenClipOnly('${id}')">重生</button></div>`;
+    }).join("")}</div>`;
   } else if(!chap.files.output){ html='<div class="note">尚未生成影片</div>'; }
   el.innerHTML = html;
+}
+// 影格/影片分頁的單獨重生（不改 prompt，直接重生）
+async function regenFrameOnly(id){
+  try{ await api(`/api/projects/${proj.id}/chapters/${chap.id}/shots/${id}/frame`,{method:"POST"});
+    toast(`重生首幀 ${id}…`); await selectChapter(chap.id);
+  }catch(e){ alert("重生失敗："+e.message); }
+}
+async function regenClipOnly(id){
+  try{ await api(`/api/projects/${proj.id}/chapters/${chap.id}/shots/${id}/clip`,{method:"POST"});
+    toast(`重生片段 ${id}…`); await selectChapter(chap.id);
+  }catch(e){ alert("重生失敗："+e.message); }
 }
 async function renderLog(el){
   const {logs} = await api(`/api/projects/${proj.id}/chapters/${chap.id}/logs`);
@@ -540,6 +668,14 @@ async function deleteChapter(ev, cid, title){
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // 供內嵌 onclick 的單引號 JS 字串使用：先 HTML 跳脫，再跳脫反斜線與單引號
 function ja(s){ return esc(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+let toastTimer=null;
+function toast(msg){
+  let t=document.getElementById("toast");
+  if(!t){ t=document.createElement("div"); t.id="toast"; t.className="toast"; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove("show"), 2200);
+}
 </script>
 </body>
 </html>

@@ -23,6 +23,9 @@ NEGATIVE = ("lowres, bad anatomy, bad hands, text, error, missing fingers, "
             "jpeg artifacts, signature, watermark, blurry")
 
 STYLE = "masterpiece, best quality, highly detailed, cinematic lighting, anime style"
+# 角色卡立繪的正向品質詞（放最前，確保不被 CLIP 77 token 截掉）
+PORTRAIT_QUALITY = ("masterpiece, best quality, newest, absurdres, highres, detailed eyes, "
+                    "beautiful, perfect eyes, glossy material render, semi-realistic")
 # 立繪框景詞（簡短，不再疊一份 STYLE，組裝時去重）
 PORTRAIT_STYLE = "full body, standing pose, plain background, front view"
 CAMERAS = ["medium shot", "close-up", "wide establishing shot", "over-the-shoulder shot",
@@ -32,8 +35,8 @@ MOTIONS = ["slow push-in", "gentle pan left", "subtle handheld sway",
 
 
 def _portrait_prompt(card: dict) -> str:
-    """組角色立繪 prompt：框景在前、角色外貌次之、風格最後，去重避免 CLIP 截斷。"""
-    return _dedupe_prompt(f'{PORTRAIT_STYLE}, {card.get("sd_prompt", "")}, {STYLE}')
+    """組角色立繪 prompt：品質詞在前（必留）、角色外貌次之、框景最後，去重避免 CLIP 截斷。"""
+    return _dedupe_prompt(f'{PORTRAIT_QUALITY}, {card.get("sd_prompt", "")}, {PORTRAIT_STYLE}')
 
 
 def regenerate_portrait(project: Project, name: str, seed: int | None = None) -> int:

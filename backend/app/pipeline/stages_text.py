@@ -27,7 +27,7 @@ QUALITY = ("masterpiece, best quality, newest, absurdres, highres, detailed eyes
            "beautiful, perfect eyes, glossy material render, semi-realistic")
 STYLE = QUALITY   # 相容舊引用
 # 立繪框景詞（簡短，不再疊一份品質詞，組裝時去重）
-PORTRAIT_STYLE = "full body, standing pose, plain background, front view"
+PORTRAIT_STYLE = "full body, standing pose, no background, front view"
 # 與 semi-realistic 衝突、組 prompt 時要濾掉的風格詞（不分大小寫，整段比對）
 _CONFLICT_STYLES = {"anime style", "anime", "2d", "cartoon", "manga", "comic",
                     "flat color", "flat colors", "cel shading", "chibi"}
@@ -86,18 +86,22 @@ def run_read_novel(project: Project, ch: Chapter, options: dict) -> dict:
 
 
 _CHAR_SYSTEM = ("你是分鏡師，從小說片段擷取主要角色，輸出 JSON 物件 {\"characters\": [...]}，"
-                "每個角色含 name, aliases(陣列), appearance(外貌), personality(性格), "
-                "sd_prompt(用於 Stable Diffusion 的英文外貌提示詞)。只列有名有姓或明確指稱的角色。")
+                "每個角色含 name, aliases(陣列), "
+                "appearance(外貌，**必須包含**：年齡、衣著、髮色、髮型，可再補其他特徵), "
+                "personality(性格), "
+                "sd_prompt(英文外貌提示詞，**必須含** age、clothing、hair color、hairstyle 對應描述)。"
+                "只列有名有姓或明確指稱的角色。")
 
 
 def _mock_cards(text: str, top: int = 4) -> list[dict]:
-    """離線：依文字啟發式推測角色名，產生佔位角色卡。"""
+    """離線：依文字啟發式推測角色名，產生佔位角色卡（外貌含年齡/衣著/髮色/髮型欄位）。"""
     return [{
         "name": name,
         "aliases": [],
-        "appearance": f"{name}，外貌特徵待補（離線推測）",
+        "appearance": f"{name}：年齡待補、衣著待補、髮色待補、髮型待補（離線推測）",
         "personality": "性格描述待補（離線推測）",
-        "sd_prompt": f"1person, {name}, detailed face, expressive eyes, {STYLE}",
+        "sd_prompt": (f"1person, {name}, young adult, casual outfit, "
+                      f"dark hair, medium-length hair, detailed face, expressive eyes"),
     } for name in extract_names(text, top=top)]
 
 
@@ -114,10 +118,12 @@ def _normalize_card(raw: dict) -> dict | None:
     return {
         "name": name,
         "aliases": list(aliases),
-        "appearance": (raw.get("appearance") or f"{name}，外貌特徵待補").strip(),
+        "appearance": (raw.get("appearance")
+                       or f"{name}：年齡待補、衣著待補、髮色待補、髮型待補").strip(),
         "personality": (raw.get("personality") or "性格描述待補").strip(),
         "sd_prompt": (raw.get("sd_prompt")
-                      or f"1person, {name}, detailed face, expressive eyes, {STYLE}").strip(),
+                      or f"1person, {name}, young adult, casual outfit, dark hair, "
+                         f"medium-length hair, detailed face").strip(),
     }
 
 
@@ -148,6 +154,102 @@ def _extract_characters(llm: LLMClient, segments: list[dict]) -> list[dict]:
             else:
                 merged[card["name"]] = card
     return list(merged.values())
+
+
+# ---------- 場地卡擷取 ----------
+_LOC_SYSTEM = ("你是美術設定師，從小說片段擷取出現的『場景／場地』，輸出 JSON 物件 {\"locations\": [...]}。"
+               "每個場地含 name(場地名稱), description(場地描述,中文,重點描述環境), "
+               "indoor_outdoor(室內或室外), props(場景物品,中文陣列), "
+               "time_of_day(時間,如 白天/黃昏/夜晚/清晨), "
+               "sd_prompt(英文場景背景提示詞,給 Stable Diffusion)。重複場景請合併，只列明確場景。")
+
+
+def _mock_locations(text: str) -> list[dict]:
+    """離線：用場景關鍵字粗略推一個場地卡。"""
+    kw = _scene_keywords(text)
+    if not kw:
+        return []
+    outdoor = any(k in text for k in "街城海山森林野外路橋")
+    night = ("夜" in text or "晚" in text)
+    return [{
+        "name": "場景（離線推測）",
+        "description": f"含 {kw}",
+        "indoor_outdoor": "室外" if outdoor else "室內",
+        "props": [],
+        "time_of_day": "夜晚" if night else "白天",
+        "sd_prompt": kw,
+    }]
+
+
+def _normalize_location(raw: dict) -> dict | None:
+    """補齊場地卡欄位；無名字則丟棄。props 強制成 list。"""
+    if not isinstance(raw, dict):
+        return None
+    name = (raw.get("name") or "").strip()
+    if not name:
+        return None
+    props = raw.get("props") or []
+    if isinstance(props, str):
+        props = [p.strip() for p in re.split(r"[、,/]", props) if p.strip()]
+    return {
+        "name": name,
+        "description": (raw.get("description") or "").strip(),
+        "indoor_outdoor": (raw.get("indoor_outdoor") or "").strip(),
+        "props": list(props),
+        "time_of_day": (raw.get("time_of_day") or "").strip(),
+        "sd_prompt": (raw.get("sd_prompt") or "").strip(),
+    }
+
+
+def _extract_locations(llm: LLMClient, segments: list[dict]) -> list[dict]:
+    """分批掃完整章內文擷取場地並聯集去重。"""
+    n = settings.llm.character_batch
+    batches = ([segments[i:i + n] for i in range(0, len(segments), n)]
+               if n and n > 0 else [segments])
+    merged: dict[str, dict] = {}
+    for segs in batches:
+        chunk = "\n".join(s["text"] for s in segs)
+        try:
+            sb = llm.generate_json(
+                system=_LOC_SYSTEM,
+                user=chunk[:6000],
+                mock_builder=lambda c=chunk: {"locations": _mock_locations(c)},
+            )
+            raw = sb.get("locations", sb) if isinstance(sb, dict) else sb
+        except Exception:  # noqa: BLE001 — 壞 JSON / 逾時：該批退回啟發式
+            raw = _mock_locations(chunk)
+        for item in (raw if isinstance(raw, list) else []):
+            loc = _normalize_location(item)
+            if not loc:
+                continue
+            if loc["name"] in merged:   # 跨批重複：聯集物品，其餘保留先出現的
+                ex = merged[loc["name"]]
+                ex["props"] = list(dict.fromkeys(ex["props"] + loc["props"]))
+            else:
+                merged[loc["name"]] = loc
+    return list(merged.values())
+
+
+# ---------- 階段：場地卡（專案層級共用池）----------
+def run_location_cards(project: Project, ch: Chapter, options: dict) -> dict:
+    segments = ch.read_json("segments.json")
+    llm = LLMClient()
+    regenerate = set(options.get("regenerate") or [])
+    candidates = _extract_locations(llm, segments)
+
+    by_name = {l["name"]: l for l in project.read_locations()}
+    added = 0
+    for loc in candidates:
+        name = loc["name"]
+        if name in by_name and name not in regenerate:
+            # 沿用既有，聯集物品
+            by_name[name]["props"] = list(dict.fromkeys(by_name[name].get("props", []) + loc["props"]))
+        else:
+            added += int(name not in by_name)
+            by_name[name] = loc
+    project.write_locations(list(by_name.values()))
+    ch.log(f"場地卡完成：本章抽到 {len(candidates)} 個，共用池共 {len(by_name)} 個場地")
+    return {"found": len(candidates), "added": added, "total": len(by_name)}
 
 
 # ---------- 階段 2：角色卡（專案層級共用池 + 立繪）----------
@@ -317,16 +419,18 @@ def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
 
 
 def _storyboard_batch(llm: LLMClient, segs: list[dict], characters: list[dict],
-                      char_lookup: dict, ch: Chapter | None = None) -> list[dict]:
+                      char_lookup: dict, ch: Chapter | None = None,
+                      locations: list[dict] | None = None) -> list[dict]:
     """對一批段落產生分鏡，回傳正規化後、與段落一一對應的鏡頭。
 
     該批 LLM 逾時或回傳壞 JSON 時，退回啟發式（_normalize_shot(None,...) 等同 _mock_shot），
     只讓這批降級、不讓整個分鏡階段崩潰。
     """
+    loc_ctx = ("\n\n場地（請依此保持場景一致）：\n" + str(locations)[:1500]) if locations else ""
     try:
         sb = llm.generate_json(
             system=_SB_SYSTEM,
-            user="角色：\n" + str(characters)[:2000] + "\n\n段落：\n"
+            user="角色：\n" + str(characters)[:2000] + loc_ctx + "\n\n段落：\n"
                  + "\n".join(f'{s["index"]}. {s["text"]}' for s in segs)[:6000],
             mock_builder=lambda: {"shots": [_mock_shot(s, char_lookup) for s in segs]},
         )
@@ -369,6 +473,7 @@ def run_storyboard(project: Project, ch: Chapter, options: dict) -> dict:
     # 先整合一部分段落，讓每個鏡頭更完整、語音更連貫
     segments = _merge_segments(raw_segments, settings.llm.storyboard_merge_chars)
     characters = project.read_characters()      # 用專案層級共用角色
+    locations = project.read_locations()        # 用專案層級共用場地（讓場景一致）
     char_lookup = {c["name"]: c for c in characters}
     llm = LLMClient()
 
@@ -379,7 +484,7 @@ def run_storyboard(project: Project, ch: Chapter, options: dict) -> dict:
 
     shots: list[dict] = []
     for bi, segs in enumerate(batches):
-        shots.extend(_storyboard_batch(llm, segs, characters, char_lookup, ch))
+        shots.extend(_storyboard_batch(llm, segs, characters, char_lookup, ch, locations))
         if len(batches) > 1:
             ch.log(f"分鏡批次 {bi + 1}/{len(batches)} 完成（累計 {len(shots)} 鏡頭）")
 

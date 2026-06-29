@@ -21,6 +21,7 @@ from . import stages_media as sm
 HANDLERS: dict[str, Callable[[Project, Chapter, dict], dict]] = {
     "read_novel": st.run_read_novel,
     "character_cards": st.run_character_cards,
+    "location_cards": st.run_location_cards,
     "storyboard": st.run_storyboard,
     "sd_first_frame": sm.run_sd_first_frame,
     "comfy_video": sm.run_comfy_video,

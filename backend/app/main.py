@@ -55,6 +55,14 @@ class RegenPortrait(BaseModel):
     seed: int | None = None
 
 
+class EditLocation(BaseModel):
+    description: str | None = None
+    indoor_outdoor: str | None = None
+    props: list[str] | None = None
+    time_of_day: str | None = None
+    sd_prompt: str | None = None
+
+
 # ---------- 後設 ----------
 @app.get("/api/settings")
 def get_settings() -> dict:
@@ -270,6 +278,28 @@ def regenerate_character_portrait(pid: str, name: str, body: RegenPortrait) -> d
     return {"ok": True}
 
 
+@app.get("/api/projects/{pid}/locations")
+def get_locations(pid: str) -> dict:
+    return {"locations": _load(pid).read_locations()}
+
+
+@app.put("/api/projects/{pid}/locations/{name}")
+def edit_location(pid: str, name: str, body: EditLocation) -> dict:
+    p = _load(pid)
+    locs = p.read_locations()
+    loc = next((l for l in locs if l["name"] == name), None)
+    if loc is None:
+        raise HTTPException(404, "找不到場地")
+    for f in ("description", "indoor_outdoor", "time_of_day", "sd_prompt"):
+        v = getattr(body, f)
+        if v is not None:
+            loc[f] = v
+    if body.props is not None:
+        loc["props"] = body.props
+    p.write_locations(locs)
+    return loc
+
+
 @app.get("/api/projects/{pid}/file/{path:path}")
 def get_project_file(pid: str, path: str) -> FileResponse:
     """專案層級檔案（如角色立繪 characters/{slug}.png）。"""
@@ -324,6 +354,7 @@ def _project_view(p: Project) -> dict:
         "seed": p.base_seed(),
         "chapters": [_chapter_summary(p, m) for m in p.list_chapters()],
         "character_count": len(p.read_characters()),
+        "location_count": len(p.read_locations()),
     }
 
 

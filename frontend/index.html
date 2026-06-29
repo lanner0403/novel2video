@@ -335,7 +335,7 @@ function renderMain(){
     </div>
     <div class="card">
       <div class="tabs">
-        ${tab("char","角色卡")}${tab("board","分鏡")}${tab("frame","影格")}${tab("video","影片")}${tab("log","日誌")}
+        ${tab("char","角色卡")}${tab("loc","場地卡")}${tab("board","分鏡")}${tab("frame","影格")}${tab("video","影片")}${tab("log","日誌")}
       </div>
       <div class="tabbody" id="tabbody"></div>
     </div>`;
@@ -382,6 +382,7 @@ function stLabel(s){return {pending:"待執行",running:"執行中",done:"完成
 async function renderTab(){
   const el = document.getElementById("tabbody"); if(!el) return;
   if(activeTab==="char") return renderChar(el);
+  if(activeTab==="loc") return renderLoc(el);
   if(activeTab==="board") return renderBoard(el);
   if(activeTab==="frame") return renderFrame(el);
   if(activeTab==="video") return renderVideo(el);
@@ -493,6 +494,47 @@ async function genCharacters(){
   const regenerate = [...document.querySelectorAll('.reuse')]
     .filter(cb=>!cb.checked).map(cb=>cb.dataset.name);
   await runStage("character_cards","only",{regenerate});
+}
+
+// 場地卡：專案層級共用，描述場景/室內外/物品/時間，供分鏡保持場景一致
+async function renderLoc(el){
+  const {locations} = await api(`/api/projects/${proj.id}/locations`);
+  const head = `<div class="charhead">
+      <button class="btn-sm" onclick="genLocations()">依本章產生 / 更新場地卡</button>
+      <span class="hint">場地卡為專案共用：場地描述、室內外、場景物品、時間（白天/夜晚）。供分鏡保持場景一致。</span>
+    </div>`;
+  if(!locations.length){
+    el.innerHTML = head + '<div class="note">尚無場地卡。執行「場地卡產生」或按上方按鈕。</div>';
+    return;
+  }
+  el.innerHTML = head + locations.map((l,i)=>`
+    <div class="shot">
+      <div class="sh"><span class="id">${esc(l.name)}</span>
+        <span>${esc(l.indoor_outdoor||'')} · ${esc(l.time_of_day||'')}</span></div>
+      <div class="sb">
+        <label class="fld"><span>場地描述</span><textarea id="lo-${i}-description">${esc(l.description||'')}</textarea></label>
+        <div style="display:flex;gap:8px">
+          <label class="fld" style="flex:1"><span>室內 / 室外</span><input id="lo-${i}-indoor_outdoor" value="${esc(l.indoor_outdoor||'')}"></label>
+          <label class="fld" style="flex:1"><span>時間（白天/夜晚…）</span><input id="lo-${i}-time_of_day" value="${esc(l.time_of_day||'')}"></label>
+        </div>
+        <label class="fld"><span>場景物品（逗號分隔）</span><input id="lo-${i}-props" value="${esc((l.props||[]).join(', '))}"></label>
+        <label class="fld"><span>場景 prompt（英文，給 SD 背景）</span><textarea id="lo-${i}-sd_prompt">${esc(l.sd_prompt||'')}</textarea></label>
+        <div class="shotacts"><button class="btn-sm" onclick="saveLoc('${ja(l.name)}',${i})">儲存</button></div>
+      </div></div>`).join("");
+}
+async function genLocations(){ await runStage("location_cards","only",{}); }
+async function saveLoc(name, i){
+  const v = k => document.getElementById(`lo-${i}-${k}`).value;
+  const body = {
+    description: v("description"), indoor_outdoor: v("indoor_outdoor"),
+    time_of_day: v("time_of_day"), sd_prompt: v("sd_prompt"),
+    props: v("props").split(/[,，]/).map(s=>s.trim()).filter(Boolean),
+  };
+  try{
+    await api(`/api/projects/${proj.id}/locations/${encodeURIComponent(name)}`,
+      {method:"PUT",headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast("場地卡已儲存");
+  }catch(e){ alert("儲存失敗："+e.message); }
 }
 
 async function renderBoard(el){
@@ -716,7 +758,7 @@ function ja(s){ return esc(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
 function renderPsub(){
   const el=document.getElementById("psub"); if(!proj){ el.textContent=""; return; }
-  el.innerHTML = `${proj.chapters.length} 章 · ${proj.character_count} 角色 · seed `+
+  el.innerHTML = `${proj.chapters.length} 章 · ${proj.character_count} 角色 · ${proj.location_count||0} 場地 · seed `+
     `<b id="psub-seed">${proj.seed}</b> `+
     `<button class="btn-sm" style="padding:2px 7px;font-size:11px" onclick="resetSeed()">🎲 重設</button>`;
 }

@@ -33,6 +33,7 @@ from ..config import DATA_DIR
 STAGES: list[tuple[str, str]] = [
     ("read_novel", "讀取小說"),
     ("character_cards", "角色卡產生"),
+    ("location_cards", "場地卡產生"),
     ("storyboard", "分鏡產生"),
     ("sd_first_frame", "SD 生成首幀"),
     ("comfy_video", "ComfyUI 生成影片"),
@@ -251,6 +252,17 @@ class Project:
     def write_characters(self, cards: list[dict]) -> None:
         (self.dir / "characters.json").write_text(
             json.dumps(cards, ensure_ascii=False, indent=2), "utf-8")
+
+    # ---- 專案層級共用場地卡 ----
+    def read_locations(self) -> list[dict]:
+        path = self.dir / "locations.json"
+        if not path.exists():
+            return []
+        return json.loads(path.read_text("utf-8"))
+
+    def write_locations(self, locs: list[dict]) -> None:
+        (self.dir / "locations.json").write_text(
+            json.dumps(locs, ensure_ascii=False, indent=2), "utf-8")
 
     def portrait_path(self, name: str) -> Path:
         return self.dir / "characters" / f"{slugify(name)}.png"

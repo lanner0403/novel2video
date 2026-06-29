@@ -391,9 +391,10 @@ async function renderTab(){
 // 角色卡：專案層級共用池，勾選＝沿用，取消勾選＝重新生成
 async function renderChar(el){
   const {characters} = await api(`/api/projects/${proj.id}/characters`);
+  charsCache = characters;   // 供「編輯」對話框查角色資料
   const head = `<div class="charhead">
       <button class="btn-sm" onclick="genCharacters()">依本章產生 / 更新角色卡</button>
-      <span class="hint">勾選＝沿用既有立繪；取消勾選的角色會重新生成。本章新角色一律自動生成。</span>
+      <span class="hint">單一角色可按「✎ 編輯」改內容並重生；勾選＝沿用、取消勾選會在「依本章產生」時重生。</span>
     </div>`;
   if(!characters.length){
     el.innerHTML = head + '<div class="note">尚無共用角色。先執行「角色卡產生」或按上方按鈕。</div>';

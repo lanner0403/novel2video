@@ -15,8 +15,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import stat
@@ -55,6 +57,15 @@ def clean_name(name: str, fallback: str = "未命名", limit: int = 80) -> str:
     s = _INVALID_NAME.sub("", name or "")
     s = re.sub(r"\s+", " ", s).strip().strip(".").strip()
     return s[:limit] or fallback
+
+
+def _derive_seed(base: int, key: str) -> int:
+    """從專案基礎 seed 與 key（角色名/鏡頭 id）穩定推導出一個子 seed。
+
+    同一專案 seed → 同一組子 seed（可重現）；不同 key → 不同子 seed（角色/鏡頭仍有變化）。
+    """
+    h = hashlib.md5(f"{base}:{key}".encode("utf-8")).hexdigest()
+    return int(h[:8], 16) % 2_000_000_000 + 1
 
 
 def _rmtree(path: Path) -> None:
@@ -129,6 +140,7 @@ class Project:
             "id": pid,
             "name": clean_name(name, "未命名專案"),
             "created_at": time.time(),
+            "seed": random.randint(1, 2_000_000_000),   # 專案層級固定 seed，整個專案共用
             "chapters": [],          # [{id, title, created_at}]
             "logs": [],
         }
@@ -181,6 +193,26 @@ class Project:
         self.state.setdefault("logs", []).append({"t": time.time(), "msg": msg})
         self.state["logs"] = self.state["logs"][-300:]
         self.save()
+
+    # ---- 專案層級 seed ----
+    def base_seed(self) -> int:
+        """專案固定 seed（舊專案沒有則補一個並存檔）。"""
+        s = self.state.get("seed")
+        if not s:
+            s = random.randint(1, 2_000_000_000)
+            self.state["seed"] = s
+            self.save()
+        return s
+
+    def set_seed(self, seed: int | None = None) -> int:
+        """設定（或隨機重設）專案 seed，回傳新值。"""
+        self.state["seed"] = int(seed) if seed else random.randint(1, 2_000_000_000)
+        self.save()
+        return self.state["seed"]
+
+    def derive_seed(self, key: str) -> int:
+        """由專案 seed 推導角色/鏡頭專用 seed。"""
+        return _derive_seed(self.base_seed(), key)
 
     # ---- 章節管理 ----
     def add_chapter(self, title: str, novel_text: str = "") -> "Chapter":

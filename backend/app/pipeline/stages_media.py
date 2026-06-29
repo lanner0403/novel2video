@@ -25,7 +25,10 @@ def run_sd_first_frame(project: Project, ch: Chapter, options: dict) -> dict:
             continue
         ff = shot["first_frame_prompt"]
         present = shot.get("characters") or []
+        # 有角色用角色 seed（跨鏡頭一致）；無角色則由專案 seed 推導（仍可重現、各鏡頭不同）
         seed = next((seed_by_char[n] for n in present if seed_by_char.get(n)), None)
+        if seed is None:
+            seed = project.derive_seed(shot["id"])
         sd.txt2img(ff["positive"], ff.get("negative", ""), out, seed=seed)
         shot["frame"] = f'frames/{shot["id"]}.png'
         done += 1

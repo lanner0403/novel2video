@@ -42,7 +42,8 @@ def regenerate_portrait(project: Project, name: str, seed: int | None = None) ->
     card = next((c for c in cards if c["name"] == name), None)
     if card is None:
         raise FileNotFoundError(f"共用池找不到角色：{name}")
-    seed = int(seed) if seed else random.randint(1, 2_000_000_000)
+    # 明確指定 > 角色現有 seed > 由專案 seed 推導（預設可重現）
+    seed = int(seed) if seed else (card.get("seed") or project.derive_seed(name))
     SDClient().txt2img(_portrait_prompt(card), NEGATIVE, project.portrait_path(name), seed=seed)
     card["seed"] = seed
     card["portrait"] = project.portrait_rel(name)
@@ -175,7 +176,7 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
     portraits_ok, portrait_err = 0, None
     for name, card in to_process.items():
         exists = name in pool_by_name
-        seed = random.randint(1, 2_000_000_000)   # (重)生成一律給新種子
+        seed = project.derive_seed(name)   # 由專案固定 seed 推導，整個專案可重現
         card["seed"] = seed
         card["portrait"] = project.portrait_rel(name)
         portrait_prompt = _portrait_prompt(card)

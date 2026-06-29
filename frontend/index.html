@@ -238,6 +238,7 @@ button{font-family:inherit;cursor:pointer}
     <label class="fld"><span>外貌</span><textarea id="mch-appearance" style="min-height:60px"></textarea></label>
     <label class="fld"><span>性格</span><textarea id="mch-personality" style="min-height:60px"></textarea></label>
     <label class="fld"><span>SD 提示詞（英文，影響立繪與首幀）</span><textarea id="mch-sd_prompt" style="min-height:60px"></textarea></label>
+    <label class="fld"><span>立繪 seed（留空＝用專案 seed 推導；固定數字＝鎖定此角色）</span><input id="mch-seed" type="number"></label>
     <div class="row">
       <button class="btn-sm" onclick="closeModal('modal-char')">取消</button>
       <button class="btn-sm" onclick="saveCharEdit(false)">只儲存</button>
@@ -298,7 +299,7 @@ async function selectProject(id){
   proj = await api(`/api/projects/${id}`);
   chap = null;
   document.getElementById("ptitle").textContent = proj.name;
-  document.getElementById("psub").textContent = `${proj.chapters.length} 章 · ${proj.character_count} 角色`;
+  renderPsub();
   await refreshList();
   renderChapbar();
   document.getElementById("body").innerHTML = '<div class="empty">選擇上方章節，或新增一章</div>';
@@ -430,20 +431,25 @@ function openCharEdit(name){
   document.getElementById("mch-appearance").value = c.appearance||"";
   document.getElementById("mch-personality").value = c.personality||"";
   document.getElementById("mch-sd_prompt").value = c.sd_prompt||"";
+  document.getElementById("mch-seed").value = c.seed!=null ? c.seed : "";
   document.getElementById("modal-char").classList.add("show");
 }
 async function saveCharEdit(regen){
   const val = id => document.getElementById(`mch-${id}`).value;
+  const seedRaw = val("seed").trim();
+  const seed = seedRaw==="" ? null : parseInt(seedRaw,10);
   const body = {
     aliases: val("aliases").split(/[,，]/).map(s=>s.trim()).filter(Boolean),
     appearance: val("appearance"), personality: val("personality"), sd_prompt: val("sd_prompt"),
   };
+  if(seed!=null && !isNaN(seed)) body.seed = seed;
   try{
     await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(editingChar)}`,
       {method:"PUT",headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(regen){
+      const rb = (seed!=null && !isNaN(seed)) ? JSON.stringify({seed}) : "{}";
       await api(`/api/projects/${proj.id}/characters/${encodeURIComponent(editingChar)}/regenerate`,
-        {method:"POST",headers:{'Content-Type':'application/json'},body:"{}"});
+        {method:"POST",headers:{'Content-Type':'application/json'},body:rb});
     }
     closeModal("modal-char");
     toast(regen ? "已儲存，開始重生立繪…" : "角色卡已儲存");
@@ -706,6 +712,22 @@ async function deleteChapter(ev, cid, title){
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 // 供內嵌 onclick 的單引號 JS 字串使用：先 HTML 跳脫，再跳脫反斜線與單引號
 function ja(s){ return esc(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+function renderPsub(){
+  const el=document.getElementById("psub"); if(!proj){ el.textContent=""; return; }
+  el.innerHTML = `${proj.chapters.length} 章 · ${proj.character_count} 角色 · seed `+
+    `<b id="psub-seed">${proj.seed}</b> `+
+    `<button class="btn-sm" style="padding:2px 7px;font-size:11px" onclick="resetSeed()">🎲 重設</button>`;
+}
+async function resetSeed(){
+  if(!confirm("重設整個專案的 seed？\n之後新生成的立繪／首幀會用新 seed；已產生的檔案不變，需重生才會套用。")) return;
+  try{
+    const r=await api(`/api/projects/${proj.id}/seed`,{method:"POST",headers:{'Content-Type':'application/json'},body:"{}"});
+    proj.seed=r.seed;
+    const b=document.getElementById("psub-seed"); if(b) b.textContent=r.seed;
+    toast("專案 seed 已重設為 "+r.seed);
+  }catch(e){ alert("重設失敗："+e.message); }
+}
 
 let toastTimer=null;
 function toast(msg){

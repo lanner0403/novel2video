@@ -48,6 +48,7 @@ class EditCharacter(BaseModel):
     personality: str | None = None
     sd_prompt: str | None = None
     aliases: list[str] | None = None
+    seed: int | None = None
 
 
 class RegenPortrait(BaseModel):
@@ -80,6 +81,13 @@ def create_project(body: CreateProject) -> dict:
 @app.get("/api/projects/{pid}")
 def get_project(pid: str) -> dict:
     return _project_view(_load(pid))
+
+
+@app.post("/api/projects/{pid}/seed")
+def set_project_seed(pid: str, body: RegenPortrait) -> dict:
+    """設定或隨機重設專案 seed（影響之後新生成的立繪/首幀，已存在檔案不變）。"""
+    p = _load(pid)
+    return {"seed": p.set_seed(body.seed)}
 
 
 @app.delete("/api/projects/{pid}")
@@ -243,6 +251,8 @@ def edit_character(pid: str, name: str, body: EditCharacter) -> dict:
             card[f] = v
     if body.aliases is not None:
         card["aliases"] = body.aliases
+    if body.seed is not None:
+        card["seed"] = int(body.seed)
     p.write_characters(cards)
     return card
 
@@ -311,6 +321,7 @@ def _project_view(p: Project) -> dict:
     return {
         "id": p.id,
         "name": p.state.get("name"),
+        "seed": p.base_seed(),
         "chapters": [_chapter_summary(p, m) for m in p.list_chapters()],
         "character_count": len(p.read_characters()),
     }

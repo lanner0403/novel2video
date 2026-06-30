@@ -44,6 +44,7 @@ class RunRequest(BaseModel):
 
 
 class EditCharacter(BaseModel):
+    ref_term: str | None = None    # 角色替代詞（給動畫提示詞用）
     appearance: str | None = None
     personality: str | None = None
     sd_prompt: str | None = None
@@ -183,7 +184,8 @@ def edit_shot(pid: str, cid: str, shot_id: str, body: dict) -> dict:
     shot = next((s for s in shots if s.get("id") == shot_id), None)
     if shot is None:
         raise HTTPException(404, "找不到鏡頭")
-    for k in ("summary", "characters", "first_frame_prompt", "comfy_prompt",
+    for k in ("summary", "characters", "location", "continue_prev",
+              "first_frame_prompt", "comfy_prompt",
               "narration", "dialogue", "voice_tone", "duration"):
         if k in body:
             shot[k] = body[k]
@@ -253,7 +255,7 @@ def edit_character(pid: str, name: str, body: EditCharacter) -> dict:
     card = next((c for c in cards if c["name"] == name), None)
     if card is None:
         raise HTTPException(404, "找不到角色")
-    for f in ("appearance", "personality", "sd_prompt"):
+    for f in ("ref_term", "appearance", "personality", "sd_prompt"):
         v = getattr(body, f)
         if v is not None:
             card[f] = v

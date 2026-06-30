@@ -3,3 +3,4 @@ uvicorn[standard]>=0.27
 httpx>=0.26
 pillow>=10.0
 python-multipart>=0.0.9
+zhconv>=1.4          # 讀取小說時簡體轉繁體（純 Python，無原生相依）

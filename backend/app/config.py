@@ -93,6 +93,12 @@ class ComfySettings:
 
 
 @dataclass
+class TextSettings:
+    # 讀取小說時自動把簡體中文轉繁體（需 zhconv；未安裝則略過）。
+    to_traditional: bool = _b("N2V_TO_TRADITIONAL", True)
+
+
+@dataclass
 class VideoSettings:
     width: int = 1080
     height: int = 1920
@@ -106,6 +112,7 @@ class Settings:
     llm: LLMSettings = field(default_factory=LLMSettings)
     sd: SDSettings = field(default_factory=SDSettings)
     comfy: ComfySettings = field(default_factory=ComfySettings)
+    text: TextSettings = field(default_factory=TextSettings)
     video: VideoSettings = field(default_factory=VideoSettings)
 
     def public_dict(self) -> dict:

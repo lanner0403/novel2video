@@ -31,10 +31,6 @@ PORTRAIT_STYLE = "full body, standing pose, no background, front view"
 # 與 semi-realistic 衝突、組 prompt 時要濾掉的風格詞（不分大小寫，整段比對）
 _CONFLICT_STYLES = {"anime style", "anime", "2d", "cartoon", "manga", "comic",
                     "flat color", "flat colors", "cel shading", "chibi"}
-CAMERAS = ["medium shot", "close-up", "wide establishing shot", "over-the-shoulder shot",
-           "low angle shot", "bird's-eye view"]
-MOTIONS = ["slow push-in", "gentle pan left", "subtle handheld sway",
-           "slow dolly out", "static with ambient motion"]
 
 
 def _portrait_prompt(card: dict) -> str:
@@ -74,19 +70,39 @@ def _dedupe_prompt(text: str, max_terms: int = 24) -> str:
 
 
 # ---------- 階段 1：讀取小說 ----------
+def _to_traditional(text: str, ch: Chapter | None = None) -> str:
+    """把簡體中文轉繁體（用純 Python 的 zhconv）。未安裝套件時原樣回傳並提示。"""
+    try:
+        import zhconv
+    except ImportError:
+        if ch is not None:
+            ch.log("⚠ 未安裝 zhconv，略過簡轉繁（pip install zhconv）")
+        return text
+    return zhconv.convert(text, "zh-hant")
+
+
 def run_read_novel(project: Project, ch: Chapter, options: dict) -> dict:
     text = ch.read_text("novel.txt")
     if not text.strip():
         raise ValueError("本章小說內容為空，請先貼上或上傳文字。")
+    converted = False
+    if settings.text.to_traditional:
+        new_text = _to_traditional(text, ch)
+        if new_text != text:   # 真的有簡體被轉換才回寫，讓編輯器與下游都用繁體
+            text = new_text
+            ch.write_text("novel.txt", text)
+            converted = True
     segs = split_segments(text)
     data = [{"index": i, "text": s} for i, s in enumerate(segs)]
     ch.write_json("segments.json", data)
-    ch.log(f"讀取小說完成，切出 {len(segs)} 個段落")
-    return {"segments": len(segs)}
+    ch.log(f"讀取小說完成，切出 {len(segs)} 個段落" + ("，已將簡體轉繁體" if converted else ""))
+    return {"segments": len(segs), "converted": converted}
 
 
 _CHAR_SYSTEM = ("你是分鏡師，從小說片段擷取主要角色，輸出 JSON 物件 {\"characters\": [...]}，"
                 "每個角色含 name, aliases(陣列), "
+                "ref_term(角色替代詞，中文，簡短的外型指稱，給之後動畫提示詞用，"
+                "如「白衣女子」「紅髮男子」「黑袍老人」，只要外型特徵不含名字), "
                 "appearance(外貌，**必須包含**：年齡、衣著、髮色、髮型，可再補其他特徵), "
                 "personality(性格), "
                 "sd_prompt(英文外貌提示詞，**必須含** age、clothing、hair color、hairstyle 對應描述)。"
@@ -98,6 +114,7 @@ def _mock_cards(text: str, top: int = 4) -> list[dict]:
     return [{
         "name": name,
         "aliases": [],
+        "ref_term": name,   # 離線無外貌可推，先用名字當替代詞，使用者可再編輯
         "appearance": f"{name}：年齡待補、衣著待補、髮色待補、髮型待補（離線推測）",
         "personality": "性格描述待補（離線推測）",
         "sd_prompt": (f"1person, {name}, young adult, casual outfit, "
@@ -105,25 +122,36 @@ def _mock_cards(text: str, top: int = 4) -> list[dict]:
     } for name in extract_names(text, top=top)]
 
 
+def _txt(v, default: str = "") -> str:
+    """把 LLM 可能回成 dict/list/None 的欄位安全轉成字串（避免對非字串呼叫 .strip）。"""
+    if isinstance(v, str):
+        return v.strip()
+    if v is None or isinstance(v, (dict, list)):
+        return default
+    return str(v).strip()
+
+
 def _normalize_card(raw: dict) -> dict | None:
-    """補齊角色卡欄位；無名字則丟棄。aliases 強制成 list。"""
+    """補齊角色卡欄位；無名字則丟棄。aliases 強制成 list、各欄位容忍 LLM 回傳非字串。"""
     if not isinstance(raw, dict):
         return None
-    name = (raw.get("name") or "").strip()
+    name = _txt(raw.get("name"))
     if not name:
         return None
     aliases = raw.get("aliases") or []
     if isinstance(aliases, str):
-        aliases = [a.strip() for a in re.split(r"[、,/]", aliases) if a.strip()]
+        aliases = re.split(r"[、,/]", aliases)
+    aliases = [a for a in (_txt(x) for x in aliases) if a]   # 元素可能非字串
     return {
         "name": name,
-        "aliases": list(aliases),
-        "appearance": (raw.get("appearance")
-                       or f"{name}：年齡待補、衣著待補、髮色待補、髮型待補").strip(),
-        "personality": (raw.get("personality") or "性格描述待補").strip(),
-        "sd_prompt": (raw.get("sd_prompt")
+        "aliases": list(dict.fromkeys(aliases)),
+        "ref_term": _txt(raw.get("ref_term")) or name,       # 替代詞：缺則退回名字
+        "appearance": (_txt(raw.get("appearance"))
+                       or f"{name}：年齡待補、衣著待補、髮色待補、髮型待補"),
+        "personality": _txt(raw.get("personality")) or "性格描述待補",
+        "sd_prompt": (_txt(raw.get("sd_prompt"))
                       or f"1person, {name}, young adult, casual outfit, dark hair, "
-                         f"medium-length hair, detailed face").strip(),
+                         f"medium-length hair, detailed face"),
     }
 
 
@@ -185,19 +213,20 @@ def _normalize_location(raw: dict) -> dict | None:
     """補齊場地卡欄位；無名字則丟棄。props 強制成 list。"""
     if not isinstance(raw, dict):
         return None
-    name = (raw.get("name") or "").strip()
+    name = _txt(raw.get("name"))
     if not name:
         return None
     props = raw.get("props") or []
     if isinstance(props, str):
-        props = [p.strip() for p in re.split(r"[、,/]", props) if p.strip()]
+        props = re.split(r"[、,/]", props)
+    props = [p for p in (_txt(x) for x in props) if p]   # 元素可能非字串
     return {
         "name": name,
-        "description": (raw.get("description") or "").strip(),
-        "indoor_outdoor": (raw.get("indoor_outdoor") or "").strip(),
-        "props": list(props),
-        "time_of_day": (raw.get("time_of_day") or "").strip(),
-        "sd_prompt": (raw.get("sd_prompt") or "").strip(),
+        "description": _txt(raw.get("description")),
+        "indoor_outdoor": _txt(raw.get("indoor_outdoor")),
+        "props": list(dict.fromkeys(props)),
+        "time_of_day": _txt(raw.get("time_of_day")),
+        "sd_prompt": _txt(raw.get("sd_prompt")),
     }
 
 
@@ -313,13 +342,21 @@ def run_character_cards(project: Project, ch: Chapter, options: dict) -> dict:
     return result
 
 
-_SB_SYSTEM = ("你是專業分鏡師。為「給定的每個段落」各產生一個鏡頭，輸出 JSON {\"shots\": [...]}。"
+_SB_SYSTEM = ("你是專業分鏡師，採用 LTX 圖生影（圖＋動作＋語音）。"
+              "為「給定的每個段落」各產生一個鏡頭，輸出 JSON {\"shots\": [...]}。"
               "每個鏡頭含 id, segment_index(對應段落編號), summary, characters(陣列), "
+              "location(場地名稱，從給定『場地清單』挑一個最符合的名字，沒有適合的就留空字串), "
+              "continue_prev(布林；本鏡若與上一鏡為同場景、連續不換鏡的接續動作設 true，"
+              "會用上一鏡尾幀接本鏡首幀，換場景/換鏡時設 false，預設 false), "
               "first_frame_prompt{positive,negative}(英文；positive 要明確寫出『人物外貌＋場景＋動作』，"
               "讓首幀圖就能看出是誰在什麼場景), "
-              "comfy_prompt{scene,characters,camera,motion,mood,scene_transition}(英文；scene 寫場景與動作、"
-              "characters 寫在場人物與外貌、mood 寫氛圍/語氣，給圖生影用), "
-              "narration(旁白,中文), dialogue(對白,中文), voice_tone(語音語氣,中文,如 溫柔/急促/憤怒/沉穩), "
+              "comfy_prompt{action,scene,characters,camera,motion,mood,scene_transition}："
+              "**action 最重要**，用中文描述『角色替代詞＋動作』，如「白衣女子走向窗邊」「紅髮男子轉身怒視」，"
+              "請用角色清單裡的 ref_term 指稱角色；scene/camera/mood 一律留空字串(\"\")，由使用者自行補；"
+              "scene_transition 給 cut 或 fade。 "
+              "narration(旁白,中文,可適度精簡濃縮,不必照抄原文), "
+              "dialogue(對白,中文,**盡量完整保留原文對話**), "
+              "voice_tone(語音語氣,中文,如 溫柔/急促/憤怒/沉穩), "
               "duration(秒,需足夠唸完旁白/對白)。"
               "shots 數量需與輸入段落數量一致，segment_index 用輸入給的編號。")
 
@@ -355,23 +392,28 @@ def _mock_shot(seg: dict, char_lookup: dict) -> dict:
     present = [c for n, c in char_lookup.items() if n in txt]
     char_tags = ", ".join(c["sd_prompt"] for c in present[:2])
     scene_kw = _scene_keywords(txt)
-    mood_en, tone_zh = _scene_mood(txt)
+    _, tone_zh = _scene_mood(txt)
     dialogue = extract_dialogue(txt)
     narration = txt if not dialogue else txt.replace(dialogue, "").strip()
     # 首幀 prompt：人物外貌＋場景在前（重點），風格在後；去重避免 CLIP 截斷
     positive = _dedupe_prompt(", ".join(t for t in [char_tags, scene_kw, STYLE] if t))
+    # LTX 動作：離線無法推動詞，先用在場角色的替代詞當佔位，使用者再補動作
+    ref_terms = "、".join(c.get("ref_term") or c["name"] for c in present)
     return {
         "id": f"shot_{i:04d}",
         "segment_index": i,
         "summary": txt[:40],
         "characters": [c["name"] for c in present],
+        "location": "",          # 場地卡名稱（選填，給首幀當背景）；離線無法可靠對應，留空
+        "continue_prev": False,  # 連續不換鏡：用上一鏡尾幀當本鏡首幀（預設關）
         "first_frame_prompt": {"positive": positive, "negative": NEGATIVE},
         "comfy_prompt": {
-            "scene": scene_kw or "cinematic scene",
-            "characters": char_tags,
-            "camera": CAMERAS[i % len(CAMERAS)],
-            "motion": MOTIONS[i % len(MOTIONS)],
-            "mood": mood_en,
+            "action": ref_terms,    # 角色動作（替代詞＋動作），LTX 主要依據
+            "scene": "",            # 場景：預設空白，使用者自行補
+            "characters": "",
+            "camera": "",           # 鏡頭：預設空白
+            "motion": "",           # 運鏡：預設空白
+            "mood": "",             # 氣氛：預設空白
             "scene_transition": "fade" if i % 4 == 0 else "cut",
         },
         "narration": narration or txt,
@@ -397,11 +439,15 @@ def _normalize_shot(raw: dict | None, seg: dict, char_lookup: dict) -> dict:
         "segment_index": i,
         "summary": raw.get("summary") or base["summary"],
         "characters": raw.get("characters") or base["characters"],
+        "location": _txt(raw.get("location")),  # LLM 可從場地清單挑一個，否則留空
+        "continue_prev": bool(raw.get("continue_prev")),  # 連續不換鏡（承接上一鏡尾幀）
         "first_frame_prompt": {
             "positive": _dedupe_prompt(ff.get("positive") or base["first_frame_prompt"]["positive"]),
             "negative": ff.get("negative") or NEGATIVE,
         },
         "comfy_prompt": {
+            "action": cp.get("action") or bcp["action"],
+            # scene/camera/motion/mood 預設空白（base 已是空字串），尊重 LLM 有給就用
             "scene": cp.get("scene") or bcp["scene"],
             "characters": cp.get("characters") or bcp["characters"],
             "camera": cp.get("camera") or bcp["camera"],

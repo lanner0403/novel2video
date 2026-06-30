@@ -16,6 +16,7 @@
 - `character_cards` 寫入**專案層級共用角色池** `characters.json`：本章新角色才生成，
   既有角色預設沿用；UI 可勾選，取消勾選者重生（`run` 時帶 `options.regenerate`）。
   角色 `appearance`/`sd_prompt` 要求含年齡、衣著、髮色、髮型（見 `_CHAR_SYSTEM`）。
+  角色另有 `ref_term`（替代詞，中文簡短外型指稱，如「白衣女子」；缺則退回名字），分鏡 `action` 用它指稱角色。
 - `location_cards` 寫入**專案層級共用場地池** `locations.json`（name/description/indoor_outdoor/
   props/time_of_day/sd_prompt），跨章合併；分鏡時帶入讓場景一致。無圖、純設定。
 - 產角色卡時同步呼叫 SD 產生**角色立繪** `characters/{slug}.png`，並為每個角色記錄固定 `seed`；
@@ -90,6 +91,9 @@ data/projects/{pid}/
 
 ## 核心概念
 
+- **簡轉繁**：`read_novel` 讀入後，若 `settings.text.to_traditional`（`N2V_TO_TRADITIONAL`，預設 on）
+  則用 `_to_traditional`（純 Python `zhconv`，`zh-hant`）把內文簡體轉繁體；真有變動才回寫 `novel.txt`
+  並據此切段，讓編輯器與下游 artifact 都用繁體。未裝 zhconv 則記 log 略過、不中斷。
 - **斷點續傳**：階段 4、5 會跳過已存在的 `frames/*.png` 與 `clips/*.mp4`，只補沒做的鏡頭。
 - **上游缺檔**：`Chapter.read_json/read_text` 缺檔時拋出明確錯誤（「請先執行對應階段」）。
 - **執行模型**：`run_stages_async` 在 daemon thread 跑，`_running` set + lock 以 `pid:cid` 為單位
@@ -105,6 +109,14 @@ data/projects/{pid}/
 - **專案 seed**：`Project.create` 產一個固定 `seed`（舊專案 `base_seed()` 補建）。角色/鏡頭 seed 由
   `derive_seed(key)` 從專案 seed 穩定推導 → 整個專案可重現、但各角色/鏡頭仍有變化。可 `POST /seed` 重設。
 - **立繪 seed 一致性**：`sd_first_frame` 從專案池查角色 seed，含該角色的首幀沿用（無角色則 `derive_seed(shot_id)`），降低成像偏移。
+- **首幀帶角色卡／場地卡（選填）**：每個鏡頭可選 `characters`（角色名陣列）與 `location`（場地名），
+  `stages_media._compose_ff_positive` 在產圖時把選定角色卡的 `sd_prompt`（外貌一致來源）＋場地卡 `sd_prompt`（背景）
+  併入該鏡頭的 `first_frame_prompt.positive`（品質詞與外貌在前、去重）。未選或池中查無者略過＝沿用原 positive。
+  前端分鏡頁以勾選框（角色）＋下拉（場地）編輯，存回走 `PUT shots/{sid}`；`location` 由分鏡 LLM 從場地清單挑、可空。
+- **連續不換鏡（承接尾幀）**：鏡頭可標記 `continue_prev`，`comfy_video` 依序處理時，若本鏡 `continue_prev`
+  且上一鏡片段已存在，就用 `_extract_last_frame`（ffmpeg `-sseof -1 -update 1`）抽上一鏡尾幀覆寫本鏡
+  `frames/{id}.png` 當首幀，再生本鏡片段，達成同場景連續銜接。只在要(重)生本鏡片段時覆寫；抽幀失敗則退回原首幀。
+  分鏡 LLM 可自動判斷設定，前端分鏡頁有勾選框、`PUT shots/{sid}` 存回。
 - **提示詞去重**：CLIP 上限 77 token，立繪/首幀 prompt 用 `_dedupe_prompt`（逗號去重＋截斷、重點在前），
   避免風格詞重複堆疊把角色描述擠掉而被截斷。
 - **單項編輯/重生**：角色卡、鏡頭可逐一編輯（PUT）；單一立繪走 `orch.run_task_async`（key `pid:char:slug`），
@@ -176,8 +188,10 @@ N2V_COMFY_MOCK=false N2V_COMFY_BASE_URL=http://127.0.0.1:8188   N2V_COMFY_WORKFL
 
 - **語言**：程式碼註解、log、API 訊息、UI 皆用**繁體中文**；SD/ComfyUI 提示詞用**英文**。
 - **影片規格**：直式 9:16，預設 1080×1920 @ 24fps；鏡頭秒數依語音長度估算（`_estimate_duration`，3~12s）。
-- **comfy_prompt 內容**：含 scene/characters/camera/motion/mood + voice_tone；`stages_media._video_prompt`
-  把場景＋人物＋運鏡＋要唸的台詞與語氣組成提示，餵給 LTX 等帶語音的圖生影模型。
+- **comfy_prompt 內容（LTX 導向）**：以 `action`（中文「角色替代詞＋動作」，如「白衣女子走向窗邊」）為主；
+  `scene/characters/camera/motion/mood` **預設空白**，使用者要才填（前端分鏡頁可逐欄編輯，進階欄收在 `<details>`）。
+  `stages_media._video_prompt` 以 action 為首、選填欄位有值才補，再附上「對白（盡量完整）＋旁白（可精簡）」，
+  餵給 LTX 等帶語音的圖生影模型。分鏡 LLM（`_SB_SYSTEM`）也據此產出：action 必填、其餘留空、旁白精簡、對白保留。
 - **合成保留音軌**：`_concat` 全部片段都有音軌時才併音軌（`_has_audio` 以 ffprobe 偵測），
   字幕燒錄帶 `-c:a copy`；mock 推鏡無聲則走純影像路徑。LTX 生成的語音因此能保留到成片。
 - **分鏡前整合段落**：`_merge_segments` 依 `N2V_STORYBOARD_MERGE_CHARS`（預設 200）把短段落併到約 N 字一鏡頭。

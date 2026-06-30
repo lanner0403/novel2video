@@ -183,6 +183,14 @@ button{font-family:inherit;cursor:pointer}
 .pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
 .pill{font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:10px;background:var(--bg);
   border:1px solid var(--line);color:var(--ink-dim)}
+.cpadv{margin-bottom:8px;border:1px solid var(--line);border-radius:5px;padding:4px 8px}
+.cpadv>summary{cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+  color:var(--ink-faint);list-style:revert}
+.cpadv[open]{padding-bottom:2px}
+.chk{display:flex;flex-wrap:wrap;gap:6px 12px;padding:4px 2px}
+.chkit{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--ink-dim);cursor:pointer}
+.fld select{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--ink);
+  padding:6px 8px;border-radius:4px;font-size:12px}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}
 .grid img{width:100%;border-radius:5px;border:1px solid var(--line);aspect-ratio:9/16;object-fit:cover}
@@ -247,6 +255,7 @@ button{font-family:inherit;cursor:pointer}
 <div class="modal" id="modal-char">
   <div class="dialog">
     <h3>編輯角色卡 · <span id="mch-name"></span></h3>
+    <label class="fld"><span>替代詞（給動畫提示詞用，如「白衣女子」「紅髮男子」）</span><input id="mch-ref_term"></label>
     <label class="fld"><span>別名（逗號分隔）</span><input id="mch-aliases"></label>
     <label class="fld"><span>外貌</span><textarea id="mch-appearance" style="min-height:60px"></textarea></label>
     <label class="fld"><span>性格</span><textarea id="mch-personality" style="min-height:60px"></textarea></label>
@@ -426,6 +435,7 @@ async function renderChar(el){
       <div class="info">
         <div class="cn">${esc(c.name)}${aliases}
           <label><input type="checkbox" class="reuse" data-name="${esc(c.name)}" checked> 沿用</label></div>
+        <div class="desc"><b>替代詞：</b>${esc(c.ref_term||c.name)}</div>
         <div class="desc">${esc(c.appearance||'')}　${esc(c.personality||'')}</div>
         <div class="cp">${esc(c.sd_prompt||'')}</div>
         <div class="shotacts">
@@ -442,6 +452,7 @@ function openCharEdit(name){
   if(!c) return;
   editingChar = name;
   document.getElementById("mch-name").textContent = name;
+  document.getElementById("mch-ref_term").value = c.ref_term||"";
   document.getElementById("mch-aliases").value = (c.aliases||[]).join(", ");
   document.getElementById("mch-appearance").value = c.appearance||"";
   document.getElementById("mch-personality").value = c.personality||"";
@@ -454,6 +465,7 @@ async function saveCharEdit(regen){
   const seedRaw = val("seed").trim();
   const seed = seedRaw==="" ? null : parseInt(seedRaw,10);
   const body = {
+    ref_term: val("ref_term"),
     aliases: val("aliases").split(/[,，]/).map(s=>s.trim()).filter(Boolean),
     appearance: val("appearance"), personality: val("personality"), sd_prompt: val("sd_prompt"),
   };
@@ -551,8 +563,13 @@ async function saveLoc(name, i){
 }
 
 async function renderBoard(el){
-  const a = await api(`/api/projects/${proj.id}/chapters/${chap.id}/artifact/storyboard`);
+  const [a, charsR, locsR] = await Promise.all([
+    api(`/api/projects/${proj.id}/chapters/${chap.id}/artifact/storyboard`),
+    api(`/api/projects/${proj.id}/characters`),
+    api(`/api/projects/${proj.id}/locations`),
+  ]);
   if(!a.available){ el.innerHTML='<div class="note">尚未產生分鏡</div>'; return; }
+  const allChars = charsR.characters||[], allLocs = locsR.locations||[];
   const base = `${API}/api/projects/${proj.id}/chapters/${chap.id}/file`;
   const frames = new Set(chap.files.frames), clips = new Set(chap.files.clips);
   el.innerHTML = `<div class="hint" style="padding:0 2px 10px;font-size:11px;color:var(--ink-faint)">
@@ -564,15 +581,31 @@ async function renderBoard(el){
       <div class="sh"><span class="id">${s.id}</span><span>${esc(s.summary||'')}</span>
         <span class="ch">${(s.characters||[]).map(esc).join(' ')}</span></div>
       <div class="sb">
-        <label class="fld"><span>首幀 prompt（SD 正向，英文）</span><textarea id="sh-${i}-positive">${esc(ff.positive||'')}</textarea></label>
+        <label class="fld"><span>角色卡（可選，勾選＝把該角色外貌套進首幀，維持跨鏡頭一致）</span>
+          <div class="chk">${allChars.map(c=>{
+            const on=(s.characters||[]).includes(c.name);
+            return `<label class="chkit"><input type="checkbox" name="sh-${i}-char" value="${esc(c.name)}" ${on?'checked':''}> ${esc(c.ref_term||c.name)}</label>`;
+          }).join('')||'<span class="hint" style="font-size:11px;color:var(--ink-faint)">尚無角色卡</span>'}</div></label>
+        <label class="chkit" style="margin:2px 2px 8px"><input type="checkbox" id="sh-${i}-continue_prev" ${s.continue_prev?'checked':''}> 連續不換鏡：承接上一鏡尾幀為本鏡首幀（首幀不另生圖）</label>
+        <label class="fld"><span>場地卡（可選，作首幀背景）</span>
+          <select id="sh-${i}-location">
+            <option value="">（無）</option>
+            ${allLocs.map(l=>`<option value="${esc(l.name)}" ${s.location===l.name?'selected':''}>${esc(l.name)}</option>`).join('')}
+          </select></label>
+        <label class="fld"><span>首幀 prompt（SD 正向，英文；產圖時會自動併入上方角色卡／場地卡外貌）</span><textarea id="sh-${i}-positive">${esc(ff.positive||'')}</textarea></label>
         <input type="hidden" id="sh-${i}-negative" value="${esc(ff.negative||'')}">
-        <div class="kv"><div class="k">ComfyUI 場景 / 人物 / 鏡頭 / 運鏡 / 氛圍</div>
-          <div class="pillrow"><span class="pill">🎬 ${esc(cp.scene||'')}</span>
-            <span class="pill">👤 ${esc(cp.characters||'')}</span>
-            <span class="pill">🎥 ${esc(cp.camera||'')}</span>
-            <span class="pill">🎞 ${esc(cp.motion||'')}</span>
-            <span class="pill">🌅 ${esc(cp.mood||'')}</span></div></div>
-        <label class="fld"><span>旁白（中文）</span><textarea id="sh-${i}-narration">${esc(s.narration||'')}</textarea></label>
+        <input type="hidden" id="sh-${i}-scene_transition" value="${esc(cp.scene_transition||'cut')}">
+        <label class="fld"><span>🎬 動畫動作（LTX 主要：角色替代詞＋動作，如「白衣女子走向窗邊」）</span><textarea id="sh-${i}-action">${esc(cp.action||'')}</textarea></label>
+        <details class="cpadv"><summary>進階：場景 / 人物 / 鏡頭 / 運鏡 / 氣氛（預設留空，需要才填）</summary>
+          <label class="fld"><span>場景</span><input id="sh-${i}-scene" value="${esc(cp.scene||'')}"></label>
+          <label class="fld"><span>人物</span><input id="sh-${i}-cp_characters" value="${esc(cp.characters||'')}"></label>
+          <div style="display:flex;gap:8px">
+            <label class="fld" style="flex:1"><span>鏡頭</span><input id="sh-${i}-camera" value="${esc(cp.camera||'')}"></label>
+            <label class="fld" style="flex:1"><span>運鏡</span><input id="sh-${i}-motion" value="${esc(cp.motion||'')}"></label>
+          </div>
+          <label class="fld"><span>氣氛</span><input id="sh-${i}-mood" value="${esc(cp.mood||'')}"></label>
+        </details>
+        <label class="fld"><span>旁白（中文，可精簡）</span><textarea id="sh-${i}-narration">${esc(s.narration||'')}</textarea></label>
         <label class="fld"><span>對白（中文）</span><input id="sh-${i}-dialogue" value="${esc(s.dialogue||'')}"></label>
         <div style="display:flex;gap:8px">
           <label class="fld" style="flex:1"><span>語氣</span><input id="sh-${i}-voice_tone" value="${esc(s.voice_tone||'')}"></label>
@@ -589,8 +622,19 @@ async function renderBoard(el){
 }
 async function saveShot(id, i){
   const v = k => document.getElementById(`sh-${i}-${k}`).value;
+  const charSel = Array.from(document.querySelectorAll(`input[name="sh-${i}-char"]:checked`)).map(x=>x.value);
+  const locEl = document.getElementById(`sh-${i}-location`);
+  const contEl = document.getElementById(`sh-${i}-continue_prev`);
   const body = {
+    characters: charSel,
+    location: locEl ? locEl.value : "",
+    continue_prev: contEl ? contEl.checked : false,
     first_frame_prompt: {positive: v("positive"), negative: v("negative")},
+    comfy_prompt: {
+      action: v("action"), scene: v("scene"), characters: v("cp_characters"),
+      camera: v("camera"), motion: v("motion"), mood: v("mood"),
+      scene_transition: v("scene_transition"),
+    },
     narration: v("narration"), dialogue: v("dialogue"), voice_tone: v("voice_tone"),
     duration: parseFloat(v("duration"))||4.0,
   };
